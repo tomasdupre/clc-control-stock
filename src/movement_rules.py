@@ -55,49 +55,48 @@ def apply_movement_rules(df, rules_path):
     """
     Agrega Clasificacion_CLC y CantidadNormalizada a movimientos.
 
-    Si el signo requiere revisar, mantiene la cantidad original y deja advertencia.
+    REGLA DE INTEGRIDAD: el sistema NUNCA modifica el signo ni el valor de un
+    movimiento. CantidadNormalizada es SIEMPRE igual a CantidadOriginal: se usa
+    el numero exactamente como lo informa el cliente.
+
+    La clasificacion (Entrada/Salida) queda solo como informacion. Si el signo del
+    dato no coincide con esa clasificacion (por ejemplo, una "Salida" con cantidad
+    positiva), se deja una advertencia para que una persona lo revise, pero el
+    numero no se toca.
     """
     rules_df = load_movement_rules(rules_path)
     result = df.copy()
 
+    quantities = pd.to_numeric(result.get("CantidadOriginal"), errors="coerce")
+    # El valor se usa tal cual: nunca se le cambia el signo.
+    result["CantidadNormalizada"] = quantities
+
     if "TipoMovimiento" not in result.columns:
         result["Clasificacion_CLC"] = ""
-        result["CantidadNormalizada"] = pd.to_numeric(
-            result.get("CantidadOriginal", pd.Series(dtype=float)),
-            errors="coerce",
-        )
-        result["AdvertenciaMovimiento"] = "Falta columna TipoMovimiento"
+        result["AdvertenciaMovimiento"] = ""
         return result
 
     classifications = result["TipoMovimiento"].apply(lambda value: classify_movement_value(value, rules_df))
     result["Clasificacion_CLC"] = classifications.apply(lambda item: item["Clasificacion_CLC"])
-    result["_SignoCLC"] = classifications.apply(lambda item: item["Signo"])
-    result["AdvertenciaMovimiento"] = classifications.apply(lambda item: item["Advertencia"])
+    signos = classifications.apply(lambda item: str(item["Signo"]))
+    base_warnings = classifications.apply(lambda item: item["Advertencia"])
 
-    quantities = pd.to_numeric(result.get("CantidadOriginal"), errors="coerce")
+    # Advertencias informativas (NO cambian el numero): solo marcan inconsistencias
+    # entre el signo informado y la clasificacion, para revision manual.
+    avisos = []
+    for quantity, sign, base in zip(quantities, signos, base_warnings):
+        msg = base or ""
+        if pd.notna(quantity):
+            if sign == "1" and quantity < 0:
+                aviso = "Clasificado como Entrada pero la cantidad es negativa; se respeta el dato informado"
+                msg = f"{msg} | {aviso}" if msg else aviso
+            elif sign == "-1" and quantity > 0:
+                aviso = "Clasificado como Salida pero la cantidad es positiva; se respeta el dato informado"
+                msg = f"{msg} | {aviso}" if msg else aviso
+            elif sign.lower() == "revisar":
+                aviso = "Transferencia interna: revisar deposito origen/destino"
+                msg = f"{msg} | {aviso}" if msg else aviso
+        avisos.append(msg)
+    result["AdvertenciaMovimiento"] = avisos
 
-    def normalize_quantity(quantity, sign):
-        if pd.isna(quantity):
-            return quantity
-        # Si el dato YA viene con signo negativo, respetarlo: es deliberado
-        # (por ejemplo, una entrada negativa que corrige/revierte otra entrada).
-        # Aplicar valor absoluto en ese caso pisaria una correccion legitima.
-        if quantity < 0:
-            return quantity
-        if str(sign) == "1":
-            return abs(quantity)
-        if str(sign) == "-1":
-            return -abs(quantity)
-        return quantity
-
-    result["CantidadNormalizada"] = [
-        normalize_quantity(quantity, sign)
-        for quantity, sign in zip(quantities, result["_SignoCLC"])
-    ]
-
-    revisar_mask = result["_SignoCLC"].astype(str).str.lower() == "revisar"
-    result.loc[revisar_mask, "AdvertenciaMovimiento"] = (
-        "Transferencia interna: revisar deposito origen/destino antes de usar el signo"
-    )
-
-    return result.drop(columns=["_SignoCLC"])
+    return result

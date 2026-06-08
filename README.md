@@ -377,8 +377,8 @@ Venta,Salida,-1,Resta stock
 - Cada campo CLC se asigna a una sola columna origen. Si varias columnas parecen ser `CodigoArticulo`, `Descripcion` u otro campo, el sistema conserva la mejor candidata y deja las demas pendientes para revision manual.
 - Si faltan columnas obligatorias, se informa en el reporte.
 - Si una transferencia interna requiere revisar deposito origen/destino, queda marcada como advertencia.
-- Las cantidades de salida se normalizan en negativo.
-- Las cantidades de entrada se normalizan en positivo.
+- El sistema NUNCA cambia el signo ni el valor de un movimiento: usa la cantidad exactamente como la informa el cliente (`CantidadNormalizada` = `CantidadOriginal`).
+- La clasificacion `Entrada`/`Salida` queda solo como informacion. Si el signo del dato no coincide con esa clasificacion, se deja una advertencia para revision manual, pero el numero no se toca.
 - El control automatico no inventa stock inicial: toma el primer stock informado por producto y deposito.
 - Si un SKU no aparece en la fecha inicial de stock pero aparece en la fecha final, el sistema usa `StockInicial = 0` y suma sus movimientos del periodo.
 - Si no existe deposito, el sistema usa `Sin deposito`.
