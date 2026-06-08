@@ -79,6 +79,11 @@ def apply_movement_rules(df, rules_path):
     def normalize_quantity(quantity, sign):
         if pd.isna(quantity):
             return quantity
+        # Si el dato YA viene con signo negativo, respetarlo: es deliberado
+        # (por ejemplo, una entrada negativa que corrige/revierte otra entrada).
+        # Aplicar valor absoluto en ese caso pisaria una correccion legitima.
+        if quantity < 0:
+            return quantity
         if str(sign) == "1":
             return abs(quantity)
         if str(sign) == "-1":
