@@ -155,8 +155,19 @@ def prepare_movements(movements_df, errors):
         for index in movements[invalid_dates].index:
             add_error(errors, "movimientos", index + 2, "Fecha", "Fecha invalida")
 
-    if "CantidadNormalizada" in movements.columns:
+    # Regla de integridad: el calculo usa la cantidad informada TAL CUAL.
+    # Si existe CantidadOriginal, esa es la fuente de verdad: nunca se le cambia
+    # el signo. Asi, datos normalizados de versiones anteriores (que podian tener
+    # un CantidadNormalizada con el signo invertido) se corrigen al analizar, sin
+    # necesidad de volver a normalizar.
+    if "CantidadOriginal" in movements.columns:
+        original = pd.to_numeric(movements["CantidadOriginal"], errors="coerce")
+        previa = pd.to_numeric(movements.get("CantidadNormalizada"), errors="coerce")
+        movements["CantidadNormalizada"] = original.where(original.notna(), previa)
+    elif "CantidadNormalizada" in movements.columns:
         movements["CantidadNormalizada"] = pd.to_numeric(movements["CantidadNormalizada"], errors="coerce")
+
+    if "CantidadNormalizada" in movements.columns:
         for index in movements[movements["CantidadNormalizada"].isna()].index:
             add_error(
                 errors,
