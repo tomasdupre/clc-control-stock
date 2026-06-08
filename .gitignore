@@ -1,0 +1,23 @@
+# Secretos y credenciales — NUNCA subir
+.env
+.env.*
+.streamlit/secrets.toml
+
+# Datos de clientes — no van al repositorio
+data/input/
+data/normalized/
+data/reports/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Sistema
+.DS_Store
+Thumbs.db
+~$*
+
+# Config local de herramientas
+.claude/

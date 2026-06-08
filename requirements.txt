@@ -1,0 +1,12 @@
+pandas
+numpy
+openpyxl
+xlsxwriter
+pyarrow
+python-dateutil
+rapidfuzz
+streamlit
+anthropic
+python-dotenv
+plotly
+supabase

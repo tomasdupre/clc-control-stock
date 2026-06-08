@@ -1,0 +1,15 @@
+TipoMovimiento,Clasificacion_CLC,Signo,Observacion
+Venta,Salida,-1,Resta stock
+Egreso,Salida,-1,Resta stock
+Baja,Salida,-1,Resta stock
+Consumo,Salida,-1,Resta stock
+Compra,Entrada,1,Suma stock
+Ingreso,Entrada,1,Suma stock
+Recepción,Entrada,1,Suma stock
+Devolución cliente,Entrada,1,Suma stock
+Devolución proveedor,Salida,-1,Resta stock
+Ajuste positivo,Entrada,1,Suma stock
+Ajuste negativo,Salida,-1,Resta stock
+Envío interno,Transferencia,revisar,Requiere revisar deposito origen y destino
+Transferencia enviada,Salida,-1,Resta stock
+Transferencia recibida,Entrada,1,Suma stock

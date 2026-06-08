@@ -1,0 +1,67 @@
+CampoCLC,Equivalencia,Observacion
+CodigoArticulo,SKU,Codigo del articulo o producto
+CodigoArticulo,Código,Codigo del articulo o producto
+CodigoArticulo,Codigo,Codigo del articulo o producto
+CodigoArticulo,Cod. Artículo,Codigo del articulo o producto
+CodigoArticulo,Cod Articulo,Codigo del articulo o producto
+CodigoArticulo,Item,Codigo del articulo o producto
+CodigoArticulo,Producto,Codigo del articulo o producto
+CodigoArticulo,Codigo Producto,Codigo del articulo o producto
+CodigoArticulo,Cod. Producto,Codigo del articulo o producto
+CodigoArticulo,Cod Producto,Codigo del articulo o producto
+CodigoArticulo,Codigo Interno,Codigo interno del articulo
+CodigoArticulo,Código Interno,Codigo interno del articulo
+Descripcion,Descripcion,Descripcion del articulo
+Descripcion,Descripción,Descripcion del articulo
+Descripcion,Detalle,Descripcion del articulo
+Descripcion,Nombre Producto,Descripcion del articulo
+Fecha,Fecha,Fecha del registro
+Fecha,Fecha Mov.,Fecha del movimiento
+Fecha,Fec. Transacción,Fecha de transaccion
+Fecha,Fec Transaccion,Fecha de transaccion
+Fecha,Día,Fecha del registro
+Fecha,Dia,Fecha del registro
+Deposito,Deposito,Deposito o ubicacion
+Deposito,Depósito,Deposito o ubicacion
+Deposito,Almacen,Deposito o ubicacion
+Deposito,Almacén,Deposito o ubicacion
+Deposito,Bodega,Deposito o ubicacion
+Deposito,Centro,Deposito o ubicacion
+TipoMovimiento,TipoMovimiento,Tipo de movimiento original
+TipoMovimiento,Tipo Movimiento,Tipo de movimiento original
+TipoMovimiento,Movimiento,Tipo de movimiento original
+TipoMovimiento,Operacion,Tipo de movimiento original
+TipoMovimiento,Operación,Tipo de movimiento original
+TipoMovimiento,Concepto,Tipo de movimiento original
+CantidadOriginal,Cantidad,Cantidad original informada
+CantidadOriginal,Cant.,Cantidad original informada
+CantidadOriginal,Cant,Cantidad original informada
+CantidadOriginal,Unidades,Cantidad original informada
+CantidadOriginal,Qty,Cantidad original informada
+CantidadOriginal,Cantidad Movida,Cantidad original informada
+CantidadOriginal,CantidadMovimiento,Cantidad original informada
+Documento,Documento,Documento o comprobante
+Documento,Nro Documento,Documento o comprobante
+Documento,Número Documento,Documento o comprobante
+Documento,Numero Documento,Documento o comprobante
+Documento,Comprobante,Documento o comprobante
+Documento,Factura,Documento o comprobante
+StockInformado,Stock,Stock informado por cliente
+StockInformado,Stock Final,Stock informado por cliente
+StockInformado,Saldo,Stock informado por cliente
+StockInformado,Existencia,Stock informado por cliente
+StockInformado,Inventario,Stock informado por cliente
+Categoria,Categoria,Categoria del producto
+Categoria,Categoría,Categoria del producto
+Categoria,Familia,Categoria del producto
+Categoria,Rubro,Categoria del producto
+Marca,Marca,Marca del producto
+Marca,Brand,Marca del producto
+CostoUnitario,CostoUnitario,Costo unitario del producto
+CostoUnitario,Costo Unitario,Costo unitario del producto
+CostoUnitario,Costo,Costo unitario del producto
+CostoUnitario,Precio Costo,Costo unitario del producto
+Estado,Estado,Estado del producto
+Estado,Activo,Estado del producto
+Estado,Situacion,Estado del producto
+Estado,Situación,Estado del producto
