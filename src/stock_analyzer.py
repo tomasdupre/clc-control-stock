@@ -257,6 +257,27 @@ def get_description_lookup(master_df):
     return dict(zip(valid_master["CodigoArticulo"], valid_master["Descripcion"]))
 
 
+def build_description_lookup(*dfs):
+    """
+    Arma CodigoArticulo -> Descripcion combinando varias fuentes (maestro, stock,
+    movimientos). La primera fuente que aporte una descripcion no vacia para un codigo
+    es la que gana. Asi, si el maestro no tiene un codigo (por ejemplo porque usa otro
+    sistema de codigos), igual se toma la descripcion del stock o de los movimientos.
+    """
+    lookup = {}
+    for df in dfs:
+        if df is None or getattr(df, "empty", True):
+            continue
+        if "CodigoArticulo" not in df.columns or "Descripcion" not in df.columns:
+            continue
+        codigos = df["CodigoArticulo"].astype(str)
+        descripciones = df["Descripcion"].fillna("").astype(str).str.strip()
+        for cod, desc in zip(codigos, descripciones):
+            if cod and desc and cod not in lookup:
+                lookup[cod] = desc
+    return lookup
+
+
 def get_control_initial_date(stock_df):
     valid_dates = stock_df["Fecha"].dropna() if "Fecha" in stock_df.columns else pd.Series(dtype=object)
     if valid_dates.empty:
@@ -453,6 +474,7 @@ def calculate_control_table(
     master_df,
     include_initial_date_movements=False,
     required_initial_date=None,
+    description_lookup=None,
 ):
     """
     Calcula StockCalculado y Diferencia para cada stock informado.
@@ -461,7 +483,8 @@ def calculate_control_table(
     Los movimientos acumulados se calculan por CodigoArticulo + Deposito,
     sin unir cada movimiento contra cada punto de control.
     """
-    description_lookup = get_description_lookup(master_df)
+    if description_lookup is None:
+        description_lookup = get_description_lookup(master_df)
     initial_stock = calculate_initial_stock(stock_df, required_initial_date=required_initial_date)
 
     swi = stock_df.merge(initial_stock, on=["CodigoArticulo", "Deposito"], how="left")
@@ -754,6 +777,8 @@ def run_stock_analysis(
     possible_duplicates_df = detect_possible_duplicates(movements_df)
 
     movements_for_audit_df = movements_df.copy()
+    # Guardamos las descripciones del stock ANTES de agrupar (la agrupacion las descarta).
+    stock_desc_source = stock_df.copy()
 
     if not use_deposit:
         stock_df, movements_df = aggregate_without_deposit(stock_df, movements_df)
@@ -766,12 +791,17 @@ def run_stock_analysis(
 
     required_initial_date = get_control_initial_date(stock_df)
 
+    # Descripcion combinada: maestro primero; si un codigo no esta ahi (porque el
+    # maestro usa otro sistema de codigos), se toma del stock o de los movimientos.
+    description_lookup = build_description_lookup(master_df, stock_desc_source, movements_for_audit_df)
+
     control_df, calculation_warnings_df = calculate_control_table(
         stock_df,
         movements_df,
         master_df,
         include_initial_date_movements=include_initial_date_movements,
         required_initial_date=required_initial_date,
+        description_lookup=description_lookup,
     )
     movements_without_stock_df = get_movements_without_stock(movements_for_audit_df, stock_df)
     applied_movements_df, unapplied_movements_df = classify_movements_application(
