@@ -1,6 +1,7 @@
 # Secretos y credenciales — NUNCA subir
 .env
 .env.*
+!.env.example
 .streamlit/secrets.toml
 
 # Datos de clientes — no van al repositorio

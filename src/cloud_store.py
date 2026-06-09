@@ -8,7 +8,11 @@ Guarda y lee datos organizados por CLIENTE, con HISTORIAL de corridas:
 
 Credenciales: se leen de st.secrets (en la nube) o variables de entorno / .env (local):
     SUPABASE_URL=https://xxxxx.supabase.co
-    SUPABASE_KEY=<service_role key>   (el backend es de confianza; nunca se expone al navegador)
+    SUPABASE_KEY=<clave privada de Supabase>
+
+La clave de Supabase es sensible. En produccion debe vivir en los secrets de
+Streamlit o variables de entorno del servidor, nunca en el repositorio ni en el
+codigo fuente.
 
 Si no están configuradas, `is_configured()` devuelve False y la app sigue funcionando
 solo con los archivos locales.

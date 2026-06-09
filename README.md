@@ -37,6 +37,32 @@ Las librerias usadas son:
 - `python-dateutil`: soporte para fechas.
 - `rapidfuzz`: comparacion aproximada de nombres de columnas.
 
+## Seguridad de credenciales
+
+El archivo `.env` guarda claves privadas locales y nunca debe subirse al repositorio.
+El proyecto incluye `.env.example` solo como plantilla segura.
+
+Para trabajar localmente:
+
+```powershell
+copy .env.example .env
+```
+
+Despues completar en `.env` solamente las claves que necesites:
+
+```text
+ANTHROPIC_API_KEY=
+SUPABASE_URL=
+SUPABASE_KEY=
+```
+
+Reglas importantes:
+
+- No pegar claves reales en `README.md`, codigo fuente, capturas o issues.
+- En Streamlit Cloud, cargar las claves en **Secrets**, no en archivos del repo.
+- Si una clave real se compartio por error, rotarla desde el panel del proveedor.
+- Antes de subir cambios, revisar que `git status` no muestre `.env`.
+
 ## 4. Donde poner los archivos del cliente
 
 Poner los archivos del cliente en:

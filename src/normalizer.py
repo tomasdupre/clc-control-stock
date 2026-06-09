@@ -35,8 +35,26 @@ MOVEMENT_COLUMNS = [
 
 
 def parse_date_series(series):
-    parsed = pd.to_datetime(series, errors="coerce", dayfirst=True)
-    fallback_mask = parsed.isna() & series.notna() & (series.astype(str).str.strip() != "")
+    text_values = series.astype(str).str.strip()
+    year_first_mask = text_values.str.match(r"^\d{4}[-/]\d{1,2}[-/]\d{1,2}", na=False)
+
+    parsed = pd.Series(pd.NaT, index=series.index, dtype="datetime64[ns]")
+    if year_first_mask.any():
+        parsed.loc[year_first_mask] = pd.to_datetime(
+            series.loc[year_first_mask],
+            errors="coerce",
+            dayfirst=False,
+        )
+
+    regular_mask = ~year_first_mask
+    if regular_mask.any():
+        parsed.loc[regular_mask] = pd.to_datetime(
+            series.loc[regular_mask],
+            errors="coerce",
+            dayfirst=True,
+        )
+
+    fallback_mask = parsed.isna() & series.notna() & (text_values != "")
     if fallback_mask.any():
         parsed.loc[fallback_mask] = pd.to_datetime(
             series.loc[fallback_mask],

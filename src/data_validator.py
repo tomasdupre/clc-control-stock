@@ -4,7 +4,7 @@ import pandas as pd
 REQUIRED_COLUMNS = {
     "maestro": ["CodigoArticulo"],
     "stock": ["Fecha", "CodigoArticulo", "StockInformado"],
-    "movimientos": ["Fecha", "CodigoArticulo", "TipoMovimiento", "CantidadOriginal"],
+    "movimientos": ["CodigoArticulo", "CantidadOriginal"],
 }
 
 
@@ -37,7 +37,7 @@ def validate_common_fields(df, file_type, issues):
         for index in df[empty_mask].index:
             _add_issue(issues, "Error", file_type, index + 2, "CodigoArticulo", "SKU vacio")
 
-    if "Fecha" in df.columns:
+    if "Fecha" in df.columns and file_type != "movimientos":
         empty_mask = df["Fecha"].isna() | (df["Fecha"].astype(str).str.strip() == "")
         for index in df[empty_mask].index:
             _add_issue(issues, "Error", file_type, index + 2, "Fecha", "Fecha vacia o invalida")
@@ -152,7 +152,8 @@ def validate_dataframe(df, file_type, master_df=None):
             "Cantidad no numerica",
         )
         validate_duplicates(df, file_type, issues)
-        validate_unclassified_movements(df, file_type, issues)
+        # TipoMovimiento es informativo. No debe bloquear ni ensuciar el control:
+        # la cantidad ya viene neta y se respeta tal como la manda el cliente.
 
     validate_products_without_master(df, master_df, file_type, issues)
     return pd.DataFrame(issues)

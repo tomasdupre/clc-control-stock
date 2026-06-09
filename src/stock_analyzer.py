@@ -9,7 +9,7 @@ MOVEMENTS_FILE = "movimientos_normalizado.parquet"
 MASTER_FILE = "maestro_normalizado.parquet"
 
 STOCK_REQUIRED_COLUMNS = ["Fecha", "CodigoArticulo", "Deposito", "StockInformado"]
-MOVEMENT_REQUIRED_COLUMNS = ["Fecha", "CodigoArticulo", "Deposito", "CantidadNormalizada"]
+MOVEMENT_REQUIRED_COLUMNS = ["CodigoArticulo"]
 MASTER_REQUIRED_COLUMNS = ["CodigoArticulo", "Descripcion"]
 
 
@@ -44,8 +44,26 @@ def parse_date_series(series):
     de Excel. Devuelve valores date o NaT.
     """
     original = series.copy()
-    parsed = pd.to_datetime(original, errors="coerce", dayfirst=True)
-    fallback_mask = parsed.isna() & original.notna() & (original.astype(str).str.strip() != "")
+    text_values = original.astype(str).str.strip()
+    year_first_mask = text_values.str.match(r"^\d{4}[-/]\d{1,2}[-/]\d{1,2}", na=False)
+
+    parsed = pd.Series(pd.NaT, index=original.index, dtype="datetime64[ns]")
+    if year_first_mask.any():
+        parsed.loc[year_first_mask] = pd.to_datetime(
+            original.loc[year_first_mask],
+            errors="coerce",
+            dayfirst=False,
+        )
+
+    regular_mask = ~year_first_mask
+    if regular_mask.any():
+        parsed.loc[regular_mask] = pd.to_datetime(
+            original.loc[regular_mask],
+            errors="coerce",
+            dayfirst=True,
+        )
+
+    fallback_mask = parsed.isna() & original.notna() & (text_values != "")
     if fallback_mask.any():
         parsed.loc[fallback_mask] = pd.to_datetime(
             original.loc[fallback_mask],
@@ -147,6 +165,17 @@ def prepare_movements(movements_df, errors):
     movements = prepare_common_columns(movements_df)
     validate_required_columns(movements, "movimientos", MOVEMENT_REQUIRED_COLUMNS, errors)
     movements = ensure_columns(movements, MOVEMENT_REQUIRED_COLUMNS)
+    if "CantidadOriginal" not in movements.columns and "CantidadNormalizada" not in movements.columns:
+        add_error(
+            errors,
+            "movimientos",
+            "",
+            "CantidadOriginal",
+            "Debe existir CantidadOriginal o CantidadNormalizada",
+        )
+        movements["CantidadNormalizada"] = np.nan
+    if "Fecha" not in movements.columns:
+        movements["Fecha"] = ""
 
     if "Fecha" in movements.columns:
         original_dates = movements["Fecha"].copy()
@@ -298,6 +327,124 @@ def calculate_initial_stock(stock_df, required_initial_date=None):
     return initial
 
 
+def calculate_movement_totals_for_controls(
+    control_points,
+    movements_df,
+    include_initial_date_movements=False,
+):
+    """
+    Calcula movimientos netos por punto de control sin cruzar todas las filas.
+
+    La regla de negocio sigue siendo:
+    StockCalculado = StockInicial + movimientos netos del mismo producto.
+    """
+    result = control_points.copy()
+    result["MovimientosAcumulados"] = 0.0
+
+    if result.empty or movements_df.empty:
+        return result[["__control_id", "MovimientosAcumulados"]]
+
+    required_columns = {"CodigoArticulo", "Deposito", "CantidadNormalizada"}
+    if not required_columns.issubset(movements_df.columns):
+        return result[["__control_id", "MovimientosAcumulados"]]
+
+    controls = result.copy()
+    controls["FechaControlDt"] = pd.to_datetime(controls["FechaControl"], errors="coerce")
+    controls["FechaInicialDt"] = pd.to_datetime(controls["FechaInicial"], errors="coerce")
+    controls = controls.dropna(subset=["FechaControlDt", "FechaInicialDt"])
+    if controls.empty:
+        return result[["__control_id", "MovimientosAcumulados"]]
+
+    movements = movements_df.dropna(subset=["CantidadNormalizada"]).copy()
+    if "Fecha" not in movements.columns:
+        movements["Fecha"] = ""
+    movements["FechaDt"] = pd.to_datetime(movements["Fecha"], errors="coerce")
+    movements["CantidadNormalizada"] = pd.to_numeric(
+        movements["CantidadNormalizada"],
+        errors="coerce",
+    )
+    movements = movements.dropna(subset=["CantidadNormalizada"])
+    if movements.empty:
+        return result[["__control_id", "MovimientosAcumulados"]]
+
+    undated_movements = movements[movements["FechaDt"].isna()].copy()
+    movements = movements[movements["FechaDt"].notna()].copy()
+
+    result = result.set_index("__control_id")
+
+    if not undated_movements.empty:
+        undated_totals = (
+            undated_movements.groupby(["CodigoArticulo", "Deposito"], dropna=False)["CantidadNormalizada"]
+            .sum()
+            .reset_index()
+        )
+        for _, row in undated_totals.iterrows():
+            control_group = controls[
+                (controls["CodigoArticulo"] == row["CodigoArticulo"])
+                & (controls["Deposito"] == row["Deposito"])
+                & (controls["FechaControlDt"] > controls["FechaInicialDt"])
+            ]
+            if not control_group.empty:
+                result.loc[
+                    control_group["__control_id"].to_numpy(),
+                    "MovimientosAcumulados",
+                ] += row["CantidadNormalizada"]
+
+    if movements.empty:
+        return result.reset_index()[["__control_id", "MovimientosAcumulados"]]
+
+    movements_daily = (
+        movements.groupby(
+            ["CodigoArticulo", "Deposito", "FechaDt"],
+            dropna=False,
+            as_index=False,
+        )["CantidadNormalizada"]
+        .sum()
+        .sort_values(["CodigoArticulo", "Deposito", "FechaDt"])
+    )
+
+    for key, movement_group in movements_daily.groupby(
+        ["CodigoArticulo", "Deposito"],
+        dropna=False,
+        sort=False,
+    ):
+        code, deposit = key
+        control_group = controls[
+            (controls["CodigoArticulo"] == code)
+            & (controls["Deposito"] == deposit)
+        ]
+        if control_group.empty:
+            continue
+
+        movement_dates = movement_group["FechaDt"].to_numpy(dtype="datetime64[ns]")
+        cumulative_quantities = movement_group["CantidadNormalizada"].cumsum().to_numpy(dtype=float)
+
+        control_dates = control_group["FechaControlDt"].to_numpy(dtype="datetime64[ns]")
+        initial_dates = control_group["FechaInicialDt"].to_numpy(dtype="datetime64[ns]")
+
+        control_positions = np.searchsorted(movement_dates, control_dates, side="right") - 1
+        control_totals = np.where(
+            control_positions >= 0,
+            cumulative_quantities[control_positions],
+            0.0,
+        )
+
+        initial_side = "left" if include_initial_date_movements else "right"
+        initial_positions = np.searchsorted(movement_dates, initial_dates, side=initial_side) - 1
+        initial_totals = np.where(
+            initial_positions >= 0,
+            cumulative_quantities[initial_positions],
+            0.0,
+        )
+
+        result.loc[
+            control_group["__control_id"].to_numpy(),
+            "MovimientosAcumulados",
+        ] += control_totals - initial_totals
+
+    return result.reset_index()[["__control_id", "MovimientosAcumulados"]]
+
+
 def calculate_control_table(
     stock_df,
     movements_df,
@@ -308,14 +455,15 @@ def calculate_control_table(
     """
     Calcula StockCalculado y Diferencia para cada stock informado.
 
-    Usa un range-join vectorizado: une movimientos con cada punto de control
-    por (CodigoArticulo, Deposito), filtra por rango de fechas y agrupa.
-    Es equivalente al loop anterior pero sin iterar fila por fila.
+    StockCalculado = StockInicial + MovimientosAcumulados.
+    Los movimientos acumulados se calculan por CodigoArticulo + Deposito,
+    sin unir cada movimiento contra cada punto de control.
     """
     description_lookup = get_description_lookup(master_df)
     initial_stock = calculate_initial_stock(stock_df, required_initial_date=required_initial_date)
 
     swi = stock_df.merge(initial_stock, on=["CodigoArticulo", "Deposito"], how="left")
+    swi["__control_id"] = np.arange(len(swi))
 
     if required_initial_date is not None:
         swi["FechaInicial"] = swi["FechaInicial"].fillna(required_initial_date)
@@ -331,41 +479,23 @@ def calculate_control_table(
         & swi["StockInformado"].notna()
     )
 
-    # Puntos de control con fechas válidas para el range-join
+    # Puntos de control con fechas validas para calcular movimientos netos.
     control_keys = (
-        swi.loc[can_calc, ["CodigoArticulo", "Deposito", "Fecha", "FechaInicial"]]
+        swi.loc[can_calc, ["__control_id", "CodigoArticulo", "Deposito", "Fecha", "FechaInicial"]]
         .rename(columns={"Fecha": "FechaControl"})
     )
 
     swi["MovimientosAcumulados"] = np.nan
 
     if not control_keys.empty:
-        mov_clean = movements_df.dropna(subset=["Fecha", "CantidadNormalizada"]).copy()
-
-        if not mov_clean.empty:
-            # Unir cada movimiento con todos los puntos de control de su SKU/Deposito
-            merged = mov_clean.merge(control_keys, on=["CodigoArticulo", "Deposito"], how="right")
-
-            if include_initial_date_movements:
-                date_ok = (merged["Fecha"] >= merged["FechaInicial"]) & (merged["Fecha"] <= merged["FechaControl"])
-            else:
-                date_ok = (merged["Fecha"] > merged["FechaInicial"]) & (merged["Fecha"] <= merged["FechaControl"])
-
-            movements_sum = (
-                merged.loc[date_ok]
-                .groupby(["CodigoArticulo", "Deposito", "FechaControl"], dropna=False)["CantidadNormalizada"]
-                .sum()
-                .reset_index()
-                .rename(columns={"CantidadNormalizada": "MovimientosAcumulados", "FechaControl": "Fecha"})
-            )
-
-            swi = swi.merge(movements_sum, on=["CodigoArticulo", "Deposito", "Fecha"], how="left")
-            # El merge crea una segunda columna MovimientosAcumulados_y; consolidar
-            if "MovimientosAcumulados_y" in swi.columns:
-                swi["MovimientosAcumulados"] = swi["MovimientosAcumulados_y"].combine_first(
-                    swi["MovimientosAcumulados_x"]
-                )
-                swi = swi.drop(columns=["MovimientosAcumulados_x", "MovimientosAcumulados_y"])
+        movement_totals = calculate_movement_totals_for_controls(
+            control_keys,
+            movements_df,
+            include_initial_date_movements=include_initial_date_movements,
+        )
+        if not movement_totals.empty:
+            totals = movement_totals.set_index("__control_id")["MovimientosAcumulados"]
+            swi.loc[totals.index, "MovimientosAcumulados"] = totals
 
         # Filas calculables sin movimientos: 0 en lugar de NaN
         swi.loc[can_calc & swi["MovimientosAcumulados"].isna(), "MovimientosAcumulados"] = 0.0
@@ -457,27 +587,27 @@ def classify_movements_application(
         how="left",
     )
 
-    fecha = reviewed["Fecha"]
-    cantidad = reviewed["CantidadNormalizada"]
-    fecha_inicial = reviewed["FechaInicial"]
-    fecha_max = reviewed["FechaMaximaControl"]
+    fecha = pd.to_datetime(reviewed["Fecha"], errors="coerce")
+    cantidad = pd.to_numeric(reviewed["CantidadNormalizada"], errors="coerce")
+    fecha_inicial = pd.to_datetime(reviewed["FechaInicial"], errors="coerce")
+    fecha_max = pd.to_datetime(reviewed["FechaMaximaControl"], errors="coerce")
 
     if include_initial_date_movements:
-        before_initial = fecha < fecha_inicial
+        before_initial = fecha.notna() & fecha_inicial.notna() & (fecha < fecha_inicial)
         before_initial_msg = "Movimiento anterior a la fecha inicial; no se suma al stock calculado"
     else:
-        before_initial = fecha <= fecha_inicial
+        before_initial = fecha.notna() & fecha_inicial.notna() & (fecha <= fecha_inicial)
         before_initial_msg = "Movimiento en fecha inicial o anterior; no se suma al stock calculado"
 
+    after_last_control = fecha.notna() & fecha_max.notna() & (fecha > fecha_max)
+
     conditions = [
-        fecha.isna(),
         cantidad.isna(),
         fecha_inicial.isna(),
         before_initial.fillna(False),
-        (fecha > fecha_max).fillna(False),
+        after_last_control.fillna(False),
     ]
     messages = [
-        "Fecha de movimiento invalida o vacia",
         "CantidadNormalizada invalida o vacia",
         "No existe stock informado para ese CodigoArticulo/Deposito",
         before_initial_msg,
@@ -514,18 +644,22 @@ def build_summary(control_df):
     }])
 
 
-def deduplicate_movements(movements_df):
+def detect_possible_duplicates(movements_df):
     """
-    Elimina filas exactamente duplicadas por Documento + CodigoArticulo + Fecha + CantidadNormalizada.
+    DETECTA posibles movimientos duplicados, pero NO elimina ninguno.
 
-    Solo deduplica filas donde los cuatro campos están completos (para no eliminar
-    movimientos sin número de documento que podrían ser distintos).
-    Devuelve (movements_deduped, duplicates_removed).
+    Regla de integridad: el sistema nunca borra movimientos. Esta funcion solo
+    marca filas que comparten Documento + CodigoArticulo + Fecha + CantidadNormalizada
+    para que una persona las revise. Todos los movimientos siguen entrando al calculo
+    tal cual los informa el cliente (dos lineas identicas en un mismo documento suelen
+    ser dos unidades reales, no un error).
+
+    Devuelve un DataFrame con las filas sospechosas (informativo), sin modificar nada.
     """
     duplicate_columns = ["Documento", "CodigoArticulo", "Fecha", "CantidadNormalizada"]
     missing = [c for c in duplicate_columns if c not in movements_df.columns]
     if missing:
-        return movements_df.copy(), pd.DataFrame()
+        return pd.DataFrame()
 
     work = movements_df.copy()
     for col in duplicate_columns:
@@ -533,15 +667,11 @@ def deduplicate_movements(movements_df):
 
     evaluable_mask = work[duplicate_columns].ne("").all(axis=1)
     evaluable = work[evaluable_mask]
-    duplicate_mask = evaluable.duplicated(subset=duplicate_columns, keep="first")
-    removed_indices = evaluable[duplicate_mask].index
-
-    if removed_indices.empty:
-        return movements_df.copy(), pd.DataFrame()
-
-    deduped = movements_df.drop(index=removed_indices).reset_index(drop=True)
-    removed = movements_df.loc[removed_indices].copy()
-    return deduped, removed
+    duplicate_mask = evaluable.duplicated(subset=duplicate_columns, keep=False)
+    sospechosos = evaluable[duplicate_mask].index
+    if len(sospechosos) == 0:
+        return pd.DataFrame()
+    return movements_df.loc[sospechosos].copy()
 
 
 def summarize_applied_movements(applied_movements_df):
@@ -617,9 +747,9 @@ def run_stock_analysis(
     movements_df = prepare_movements(data["movimientos"], errors)
     master_df = prepare_master(data["maestro"], errors)
 
-    # Deduplicar movimientos ANTES de cualquier agregacion o calculo.
-    # Los duplicados se eliminan del calculo y quedan documentados en el reporte.
-    movements_df, duplicates_removed_df = deduplicate_movements(movements_df)
+    # Regla de integridad: NO se elimina ningun movimiento. Solo se detectan
+    # posibles duplicados para informar al usuario; todos entran al calculo tal cual.
+    possible_duplicates_df = detect_possible_duplicates(movements_df)
 
     movements_for_audit_df = movements_df.copy()
 
@@ -650,10 +780,10 @@ def run_stock_analysis(
     )
 
     warnings = []
-    if not duplicates_removed_df.empty:
+    if not possible_duplicates_df.empty:
         warnings.append({
-            "Mensaje": "Se eliminaron movimientos duplicados antes del calculo (Documento + CodigoArticulo + Fecha + CantidadNormalizada)",
-            "CantidadFilas": len(duplicates_removed_df),
+            "Mensaje": "Se detectaron POSIBLES movimientos duplicados (NO se eliminaron; todos entraron al calculo). Revisar en la hoja duplicados_movimientos por si alguno fuera carga repetida.",
+            "CantidadFilas": len(possible_duplicates_df),
         })
 
     if not movements_without_stock_df.empty:
@@ -684,7 +814,7 @@ def run_stock_analysis(
         movements_without_stock_df,
         applied_movements_df,
         unapplied_movements_df,
-        duplicates_removed_df,
+        possible_duplicates_df,
         errors_df,
         warnings_df,
         Path(reports_dir) / output_file_name,

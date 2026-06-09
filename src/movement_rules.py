@@ -23,7 +23,7 @@ def classify_movement_value(value, rules_df):
         return {
             "Clasificacion_CLC": "",
             "Signo": "",
-            "Advertencia": "TipoMovimiento vacio",
+            "Advertencia": "",
         }
 
     exact = rules_df[rules_df["TipoMovimiento_Normalizado"] == normalized_value]

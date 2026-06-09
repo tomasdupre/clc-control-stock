@@ -16,7 +16,7 @@ load_dotenv()
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from column_mapper import PENDING_FIELD, mapping_dataframe_to_dict, propose_column_mapping
+from column_mapper import PENDING_FIELD, mapping_dataframe_to_dict, normalize_text, propose_column_mapping
 from normalizer import export_normalized, normalize_code, normalize_master, normalize_movements, normalize_stock
 from stock_analyzer import run_stock_analysis
 from diagnosis_generator import generate_diagnosis
@@ -56,14 +56,18 @@ VALID_CLC_FIELDS = [
 REQUIRED_BY_TYPE = {
     "maestro": ["CodigoArticulo"],
     "stock": ["CodigoArticulo", "Fecha", "StockInformado"],
-    "movimientos": ["CodigoArticulo", "Fecha", "CantidadOriginal"],
+    "movimientos": ["CodigoArticulo", "CantidadOriginal"],
 }
 
 # Campos que conviene tener pero no bloquean (solo advertencia).
 RECOMMENDED_BY_TYPE = {
     "maestro": ["Descripcion"],
     "stock": ["Deposito"],
-    "movimientos": ["TipoMovimiento", "Deposito"],
+    "movimientos": ["Fecha", "Descripcion", "Deposito"],
+}
+
+STOCK_LIKE_QUANTITY_COLUMNS = {
+    "stock", "stock final", "saldo", "existencia", "inventario", "cd",
 }
 
 
@@ -85,6 +89,34 @@ def missing_required_fields(mapping_df, file_type):
 def missing_recommended_fields(mapping_df, file_type):
     mapped = get_mapped_fields(mapping_df)
     return [f for f in RECOMMENDED_BY_TYPE.get(file_type, []) if f not in mapped]
+
+
+def mapping_blocking_issues(mapping_df, file_type):
+    """Detecta mapeos peligrosos que pueden mezclar stock con movimientos."""
+    issues = []
+    if mapping_df is None or mapping_df.empty:
+        return issues
+
+    if file_type == "movimientos":
+        quantity_rows = mapping_df[mapping_df["CampoCLC"] == "CantidadOriginal"]
+        for _, row in quantity_rows.iterrows():
+            original_column = str(row["ColumnaOriginal"])
+            normalized_column = normalize_text(original_column)
+            looks_like_stock = (
+                normalized_column in STOCK_LIKE_QUANTITY_COLUMNS
+                or "stock" in normalized_column
+                or "saldo" in normalized_column
+                or "existencia" in normalized_column
+                or "inventario" in normalized_column
+            )
+            if looks_like_stock:
+                issues.append(
+                    f"En movimientos, la columna '{original_column}' parece ser stock/saldo, "
+                    "no una cantidad de movimiento. Usar una columna de movimientos netos "
+                    "(por ejemplo: Cantidad)."
+                )
+
+    return issues
 
 def slugify(text):
     if not text:
@@ -330,6 +362,9 @@ def _load_movimientos_norm(path_str):
     p = Path(path_str)
     if p.exists():
         return pd.read_parquet(p)
+    xlsx_path = p.with_suffix(".xlsx")
+    if xlsx_path.exists():
+        return pd.read_excel(xlsx_path)
     return pd.DataFrame()
 
 
@@ -357,6 +392,118 @@ def tool_buscar_movimientos(codigo):
         "muestra_movimientos": _json_safe_records(sub, cols, limit=40),
         "nota": "Se muestran hasta 40 movimientos de ejemplo; los totales consideran todos.",
     }
+
+
+def build_movement_trace(control_df, codigo, selected_index=None):
+    """Reconstruye, fila por fila, como se forma MovimientosAcumulados."""
+    if control_df is None or control_df.empty:
+        return None, pd.DataFrame(), pd.DataFrame(), "No hay reporte de control cargado."
+
+    raw = str(codigo).strip()
+    if not raw:
+        return None, pd.DataFrame(), pd.DataFrame(), "Ingresá un código de producto."
+
+    norm = normalize_code(raw)
+    codes = control_df["CodigoArticulo"].astype(str)
+    control_rows = control_df[codes.str.upper() == norm.upper()].copy()
+    if control_rows.empty:
+        mask = codes.str.contains(re.escape(raw), case=False, na=False)
+        if "Descripcion" in control_df.columns:
+            mask = mask | control_df["Descripcion"].astype(str).str.contains(re.escape(raw), case=False, na=False)
+        control_rows = control_df[mask].copy()
+    if control_rows.empty:
+        return None, pd.DataFrame(), pd.DataFrame(), f"No se encontró '{codigo}' en el reporte activo."
+
+    control_rows["Fecha_dt"] = pd.to_datetime(control_rows["Fecha"], errors="coerce")
+    if "FechaInicial" in control_rows.columns:
+        control_rows["FechaInicial_dt"] = pd.to_datetime(control_rows["FechaInicial"], errors="coerce")
+    else:
+        control_rows["FechaInicial_dt"] = pd.NaT
+
+    control_rows = control_rows.sort_values(["Fecha_dt", "Deposito"], na_position="last")
+    if selected_index is None or selected_index not in control_rows.index:
+        non_base = control_rows[control_rows["Fecha_dt"] != control_rows["FechaInicial_dt"]]
+        selected_index = non_base.index[-1] if not non_base.empty else control_rows.index[-1]
+    control_row = control_rows.loc[selected_index]
+
+    movements = _load_movimientos_norm(str(NORMALIZED_DIR / "movimientos_normalizado.parquet"))
+    if movements.empty:
+        return control_row, pd.DataFrame(), pd.DataFrame(), "No hay movimientos normalizados disponibles."
+    if "CodigoArticulo" not in movements.columns:
+        return control_row, pd.DataFrame(), pd.DataFrame(), "El normalizado de movimientos no tiene CodigoArticulo."
+
+    mov = movements.copy()
+    control_code = normalize_code(control_row["CodigoArticulo"])
+    mov["CodigoArticuloNorm"] = mov["CodigoArticulo"].apply(normalize_code)
+    mov = mov[mov["CodigoArticuloNorm"].astype(str).str.upper() == str(control_code).upper()].copy()
+
+    if str(control_row.get("Deposito", "")).strip().upper() != "TODOS" and "Deposito" in mov.columns:
+        deposito_control = str(control_row.get("Deposito", "")).strip().upper()
+        mov = mov[mov["Deposito"].fillna("").astype(str).str.strip().str.upper() == deposito_control].copy()
+
+    if mov.empty:
+        return control_row, pd.DataFrame(), pd.DataFrame(), "No hay movimientos normalizados para ese producto."
+
+    if "Fecha" not in mov.columns:
+        mov["Fecha"] = ""
+    mov["Fecha_dt"] = pd.to_datetime(mov["Fecha"], errors="coerce")
+    cantidad_previa = pd.to_numeric(mov.get("CantidadNormalizada"), errors="coerce")
+    if "CantidadOriginal" in mov.columns:
+        cantidad_original = pd.to_numeric(mov["CantidadOriginal"], errors="coerce")
+        mov["CantidadNormalizada"] = cantidad_original.where(cantidad_original.notna(), cantidad_previa)
+    else:
+        mov["CantidadNormalizada"] = cantidad_previa
+    fecha_inicial = pd.to_datetime(control_row.get("FechaInicial"), errors="coerce")
+    fecha_control = pd.to_datetime(control_row.get("Fecha"), errors="coerce")
+
+    dated_in_period = (
+        mov["Fecha_dt"].notna()
+        & mov["CantidadNormalizada"].notna()
+        & (mov["Fecha_dt"] > fecha_inicial)
+        & (mov["Fecha_dt"] <= fecha_control)
+    )
+    undated_in_period = (
+        mov["Fecha_dt"].isna()
+        & mov["CantidadNormalizada"].notna()
+        & (fecha_control > fecha_inicial)
+    )
+    included_mask = dated_in_period | undated_in_period
+    incluidos = mov[included_mask].copy()
+    excluidos = mov[~included_mask].copy()
+    if not incluidos.empty:
+        incluidos["Fecha"] = incluidos["Fecha"].where(incluidos["Fecha_dt"].notna(), "Sin fecha")
+
+    sort_cols = ["Fecha_dt"]
+    if "Documento" in incluidos.columns:
+        sort_cols.append("Documento")
+    incluidos = incluidos.sort_values(sort_cols, na_position="last").reset_index(drop=True)
+    incluidos["Paso"] = range(1, len(incluidos) + 1)
+    incluidos["Operacion"] = incluidos["CantidadNormalizada"].apply(
+        lambda value: f"+{value:g}" if value >= 0 else f"{value:g}"
+    )
+    incluidos["Acumulado"] = incluidos["CantidadNormalizada"].cumsum()
+
+    detalle_cols = [
+        "Paso", "Fecha", "CodigoArticulo", "Descripcion", "Deposito", "TipoMovimiento",
+        "CantidadOriginal", "CantidadNormalizada", "Operacion", "Acumulado",
+        "Documento", "ArchivoOrigen", "HojaOrigen",
+    ]
+    incluidos = incluidos[[c for c in detalle_cols if c in incluidos.columns]]
+
+    if not excluidos.empty:
+        excluidos["MotivoExclusion"] = "Fuera del periodo calculado o dato invalido"
+        excluidos.loc[excluidos["Fecha_dt"].isna(), "MotivoExclusion"] = "Fecha invalida o vacia"
+        excluidos.loc[excluidos["CantidadNormalizada"].isna(), "MotivoExclusion"] = "Cantidad invalida o vacia"
+        excluidos.loc[excluidos["Fecha_dt"] <= fecha_inicial, "MotivoExclusion"] = "En fecha inicial o anterior"
+        excluidos.loc[excluidos["Fecha_dt"] > fecha_control, "MotivoExclusion"] = "Posterior a la fecha controlada"
+        excluded_cols = [
+            "Fecha", "CodigoArticulo", "Deposito", "TipoMovimiento",
+            "CantidadOriginal", "CantidadNormalizada", "Documento",
+            "ArchivoOrigen", "HojaOrigen", "MotivoExclusion",
+        ]
+        excluidos = excluidos[[c for c in excluded_cols if c in excluidos.columns]]
+
+    return control_row, incluidos, excluidos, ""
 
 
 def run_chat_tool(name, tool_input, control_df):
@@ -736,6 +883,7 @@ if page == "⚙️ Procesar":
 
                     faltantes = missing_required_fields(updated, file_type)
                     recomendados = missing_recommended_fields(updated, file_type)
+                    problemas_mapeo = mapping_blocking_issues(updated, file_type)
                     if faltantes:
                         st.error(
                             "Faltan campos **obligatorios** sin asignar: "
@@ -754,11 +902,20 @@ if page == "⚙️ Procesar":
                 faltan = missing_required_fields(
                     st.session_state.proc_mappings.get(key), entry["file_type"]
                 )
+                problemas = mapping_blocking_issues(
+                    st.session_state.proc_mappings.get(key), entry["file_type"]
+                )
                 if faltan:
                     nombre = entry["file_name"]
                     if entry["sheet_name"]:
                         nombre += f" ({entry['sheet_name']})"
                     bloqueos.append(f"- **{nombre}** [{entry['file_type']}]: falta {', '.join(faltan)}")
+                if problemas:
+                    nombre = entry["file_name"]
+                    if entry["sheet_name"]:
+                        nombre += f" ({entry['sheet_name']})"
+                    for problema in problemas:
+                        bloqueos.append(f"- **{nombre}** [{entry['file_type']}]: {problema}")
 
             st.divider()
             col_back, col_next = st.columns([1, 4])
@@ -1155,6 +1312,75 @@ elif page == "🔍 Detalle":
         use_container_width=True,
         hide_index=True,
     )
+
+    st.divider()
+    st.subheader("Cálculo de movimientos acumulados")
+    codigo_traza = st.text_input(
+        "Código para auditar",
+        value=buscar if buscar else "",
+        placeholder="Ej. TS18S",
+        key="trace_codigo",
+    )
+    if codigo_traza:
+        control_row, traza_df, excluidos_df, trace_message = build_movement_trace(
+            control_full,
+            codigo_traza,
+        )
+        if trace_message:
+            st.warning(trace_message)
+        if control_row is not None:
+            movimiento_reporte = pd.to_numeric(
+                pd.Series([control_row.get("MovimientosAcumulados")]),
+                errors="coerce",
+            ).fillna(0).iloc[0]
+            movimiento_detalle = (
+                pd.to_numeric(traza_df.get("CantidadNormalizada"), errors="coerce").fillna(0).sum()
+                if not traza_df.empty else 0
+            )
+            stock_inicial_num = pd.to_numeric(
+                pd.Series([control_row.get("StockInicial")]),
+                errors="coerce",
+            ).fillna(0).iloc[0]
+            diferencia_traza = movimiento_detalle - movimiento_reporte
+
+            st.caption(
+                f"Producto: **{control_row.get('CodigoArticulo', '')}** | "
+                f"Fecha inicial: **{control_row.get('FechaInicial', '')}** | "
+                f"Fecha control: **{control_row.get('Fecha', '')}** | "
+                f"Depósito: **{control_row.get('Deposito', '')}**"
+            )
+
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Stock inicial", f"{stock_inicial_num:,.0f}")
+            m2.metric("Suma movimientos", f"{movimiento_detalle:,.0f}")
+            m3.metric("Movimientos reporte", f"{movimiento_reporte:,.0f}")
+            m4.metric("Diferencia traza", f"{diferencia_traza:,.0f}")
+
+            if abs(diferencia_traza) > 0.000001:
+                st.error(
+                    "La suma detallada no coincide con MovimientosAcumulados del reporte. "
+                    "Revisar movimientos normalizados o regenerar el análisis."
+                )
+            elif not traza_df.empty:
+                st.success("La suma detallada coincide con MovimientosAcumulados.")
+
+            if traza_df.empty:
+                st.info("No hay movimientos aplicados para este punto de control.")
+            else:
+                st.dataframe(traza_df, use_container_width=True, hide_index=True)
+                csv = traza_df.to_csv(index=False).encode("utf-8-sig")
+                st.download_button(
+                    "Descargar detalle de cálculo CSV",
+                    data=csv,
+                    file_name=f"calculo_movimientos_{slugify(str(control_row.get('CodigoArticulo', codigo_traza)))}.csv",
+                    mime="text/csv",
+                )
+
+            with st.expander("Ver movimientos excluidos del cálculo para este producto"):
+                if excluidos_df.empty:
+                    st.info("No hay movimientos excluidos para este producto.")
+                else:
+                    st.dataframe(excluidos_df, use_container_width=True, hide_index=True)
 
     # Movimientos no aplicados: hoja potencialmente enorme, se lee solo al pedirlo.
     st.divider()
