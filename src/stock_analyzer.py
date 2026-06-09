@@ -23,7 +23,9 @@ def normalize_code(value):
     if text.endswith(".0") and text[:-2].isdigit():
         return text[:-2]
     if text.isdigit():
-        return text.lstrip("0") or "0"
+        # NO se quitan los ceros a la izquierda: son significativos y pueden
+        # diferenciar un producto de otro (ej. 0658325663198 != 658325663198).
+        return text
     return text.upper()
 
 
