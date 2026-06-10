@@ -44,26 +44,36 @@ INPUT_DIR = PROJECT_ROOT / "data" / "input"
 DICTIONARY_PATH = PROJECT_ROOT / "rules" / "diccionario_columnas.csv"
 MOVEMENT_RULES_PATH = PROJECT_ROOT / "rules" / "reglas_movimientos.csv"
 
-VALID_CLC_FIELDS = [
-    "CodigoArticulo", "Descripcion", "Fecha", "Deposito",
-    "TipoMovimiento", "CantidadOriginal", "Documento",
-    "StockInformado", "Categoria", "Marca", "CostoUnitario", "Estado",
-    PENDING_FIELD,
-]
+# Campos CLC disponibles POR TIPO de hoja. Solo estos aparecen en el desplegable
+# "Campo CLC" al mapear (más PendienteConfirmacion para lo que no se usa).
+CLC_FIELDS_BY_TYPE = {
+    "maestro": ["CodigoArticulo", "Descripcion"],
+    "stock": ["CodigoArticulo", "Fecha", "StockInformado"],
+    "movimientos": ["CodigoArticulo", "Fecha", "CantidadOriginal"],
+}
+
+
+def clc_options_for(file_type):
+    """Opciones del desplegable Campo CLC para un tipo de hoja (+ pendiente)."""
+    return CLC_FIELDS_BY_TYPE.get(file_type, []) + [PENDING_FIELD]
+
+
+# Todos los campos válidos (unión), por compatibilidad.
+VALID_CLC_FIELDS = ["CodigoArticulo", "Descripcion", "Fecha", "StockInformado", "CantidadOriginal", PENDING_FIELD]
 
 # Campos que el calculo necesita si o si por cada tipo de archivo.
 # Si alguno queda sin asignar, el normalizado sale incompleto: hay que bloquear.
 REQUIRED_BY_TYPE = {
     "maestro": ["CodigoArticulo"],
     "stock": ["CodigoArticulo", "Fecha", "StockInformado"],
-    "movimientos": ["CodigoArticulo", "CantidadOriginal"],
+    "movimientos": ["CodigoArticulo", "Fecha", "CantidadOriginal"],
 }
 
 # Campos que conviene tener pero no bloquean (solo advertencia).
 RECOMMENDED_BY_TYPE = {
     "maestro": ["Descripcion"],
-    "stock": ["Deposito"],
-    "movimientos": ["Fecha", "Descripcion", "Deposito"],
+    "stock": [],
+    "movimientos": [],
 }
 
 STOCK_LIKE_QUANTITY_COLUMNS = {
@@ -922,10 +932,15 @@ if page == "⚙️ Procesar":
                         f"Obligatorios para `{file_type}`: {', '.join(requeridos)}"
                     )
 
+                    opciones_clc = clc_options_for(file_type)
                     if key not in st.session_state.proc_mappings:
-                        st.session_state.proc_mappings[key] = propose_column_mapping(
-                            df.columns, DICTIONARY_PATH
+                        propuesta = propose_column_mapping(df.columns, DICTIONARY_PATH)
+                        # Solo se permiten los campos válidos para este tipo de hoja:
+                        # cualquier otra propuesta (ej. Deposito en un stock) queda pendiente.
+                        propuesta["CampoCLC"] = propuesta["CampoCLC"].where(
+                            propuesta["CampoCLC"].isin(opciones_clc), PENDING_FIELD
                         )
+                        st.session_state.proc_mappings[key] = propuesta
 
                     mapping_df = st.session_state.proc_mappings[key]
 
@@ -946,7 +961,7 @@ if page == "⚙️ Procesar":
                         column_config={
                             "CampoCLC": st.column_config.SelectboxColumn(
                                 "Campo CLC",
-                                options=VALID_CLC_FIELDS,
+                                options=opciones_clc,
                             ),
                             "Ejemplo": st.column_config.TextColumn("Valores de ejemplo", disabled=True),
                             "Confianza": st.column_config.NumberColumn("Confianza", disabled=True),

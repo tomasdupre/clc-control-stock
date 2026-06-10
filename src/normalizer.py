@@ -5,33 +5,23 @@ import pandas as pd
 from movement_rules import apply_movement_rules
 
 
+# Campos que se mapean por tipo de hoja (alineado con la app):
+# maestro = código + descripción; stock = fecha + código + stock; movimientos = fecha + código + cantidad.
 MASTER_COLUMNS = [
     "CodigoArticulo",
     "Descripcion",
-    "Categoria",
-    "Marca",
-    "CostoUnitario",
-    "Estado",
 ]
 
 STOCK_COLUMNS = [
     "Fecha",
     "CodigoArticulo",
-    "Deposito",
     "StockInformado",
-    "Descripcion",
 ]
 
 MOVEMENT_COLUMNS = [
     "Fecha",
     "CodigoArticulo",
-    "Descripcion",
-    "Deposito",
-    "TipoMovimiento",
-    "Clasificacion_CLC",
     "CantidadOriginal",
-    "CantidadNormalizada",
-    "Documento",
 ]
 
 
@@ -128,7 +118,9 @@ def normalize_movements(df, mapping, rules_path):
     normalized["CodigoArticulo"] = normalized["CodigoArticulo"].apply(normalize_code)
     normalized["CantidadOriginal"] = pd.to_numeric(normalized["CantidadOriginal"], errors="coerce")
     normalized = apply_movement_rules(normalized, rules_path)
-    return normalized[MOVEMENT_COLUMNS + ["AdvertenciaMovimiento"]]
+    # Salida: lo mapeado + columnas derivadas (cantidad normalizada y advertencias).
+    salida = MOVEMENT_COLUMNS + ["CantidadNormalizada", "Clasificacion_CLC", "AdvertenciaMovimiento"]
+    return normalized[[c for c in salida if c in normalized.columns]]
 
 
 NORMALIZED_FILE_NAMES = {
