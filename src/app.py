@@ -544,7 +544,7 @@ def export_normalized_to_excel():
 def reset_proc_state():
     """Reinicia el asistente de Procesar para empezar de cero con otros archivos."""
     for k in [
-        "proc_step", "proc_entries", "proc_mappings",
+        "proc_step", "proc_entries", "proc_mappings", "proc_current_mappings",
         "proc_normalized", "proc_log", "proc_result", "proc_report_name",
     ]:
         st.session_state.pop(k, None)
@@ -744,7 +744,8 @@ if page == "⚙️ Procesar":
     for key, default in [
         ("proc_step", "upload"),
         ("proc_entries", []),       # [{file_name, sheet, file_type, df}]
-        ("proc_mappings", {}),      # {entry_key: mapping_df}
+        ("proc_mappings", {}),      # {entry_key: propuesta ESTABLE que alimenta el editor}
+        ("proc_current_mappings", {}),  # {entry_key: mapeo con los cambios EN VIVO del editor}
         ("proc_normalized", {}),    # {tipo: df acumulado}
         ("proc_log", []),
     ]:
@@ -870,6 +871,7 @@ if page == "⚙️ Procesar":
                     else:
                         st.session_state.proc_entries = proc_entries
                         st.session_state.proc_mappings = {}
+                        st.session_state.proc_current_mappings = {}
                         st.session_state.proc_normalized = {"maestro": [], "stock": [], "movimientos": []}
                         st.session_state.proc_log = []
                         st.session_state.proc_step = "mapping"
@@ -907,9 +909,10 @@ if page == "⚙️ Procesar":
                 label += f" · Tipo: `{file_type}`"
 
                 requeridos = REQUIRED_BY_TYPE.get(file_type, [])
-                faltantes_previos = missing_required_fields(
-                    st.session_state.proc_mappings.get(key), file_type
-                ) if key in st.session_state.proc_mappings else requeridos
+                mapeo_previo = st.session_state.proc_current_mappings.get(
+                    key, st.session_state.proc_mappings.get(key)
+                )
+                faltantes_previos = missing_required_fields(mapeo_previo, file_type) if mapeo_previo is not None else requeridos
                 icono = "✅" if not faltantes_previos else "⚠️"
 
                 with st.expander(f"{icono} {label}", expanded=bool(faltantes_previos)):
@@ -954,14 +957,17 @@ if page == "⚙️ Procesar":
                         use_container_width=True,
                         key=f"editor_{key}",
                     )
-                    # Guardar cambios del editor en session_state
-                    updated = mapping_df.copy()
-                    updated["CampoCLC"] = edited["CampoCLC"].fillna(PENDING_FIELD).values
-                    st.session_state.proc_mappings[key] = updated
+                    # Los cambios del editor se guardan en proc_current_mappings,
+                    # NO en proc_mappings (que es la propuesta estable que alimenta
+                    # el editor). Sobrescribir la entrada del editor con su propia
+                    # salida causaba el desfasaje de "hay que hacerlo dos veces".
+                    cur = mapping_df.copy()
+                    cur["CampoCLC"] = edited["CampoCLC"].fillna(PENDING_FIELD).values
+                    st.session_state.proc_current_mappings[key] = cur
 
-                    faltantes = missing_required_fields(updated, file_type)
-                    recomendados = missing_recommended_fields(updated, file_type)
-                    problemas_mapeo = mapping_blocking_issues(updated, file_type)
+                    faltantes = missing_required_fields(cur, file_type)
+                    recomendados = missing_recommended_fields(cur, file_type)
+                    problemas_mapeo = mapping_blocking_issues(cur, file_type)
                     if faltantes:
                         st.error(
                             "Faltan campos **obligatorios** sin asignar: "
@@ -977,12 +983,11 @@ if page == "⚙️ Procesar":
             bloqueos = []
             for entry in entries:
                 key = entry_key(entry)
-                faltan = missing_required_fields(
-                    st.session_state.proc_mappings.get(key), entry["file_type"]
+                mapeo_actual = st.session_state.proc_current_mappings.get(
+                    key, st.session_state.proc_mappings.get(key)
                 )
-                problemas = mapping_blocking_issues(
-                    st.session_state.proc_mappings.get(key), entry["file_type"]
-                )
+                faltan = missing_required_fields(mapeo_actual, entry["file_type"])
+                problemas = mapping_blocking_issues(mapeo_actual, entry["file_type"])
                 if faltan:
                     nombre = entry["file_name"]
                     if entry["sheet_name"]:
@@ -1025,7 +1030,9 @@ if page == "⚙️ Procesar":
                         done / total_steps,
                         text=f"Normalizando {entry['file_name']} [{file_type}] · {len(entry['df']):,} filas...",
                     )
-                    mapping_df = st.session_state.proc_mappings.get(key)
+                    mapping_df = st.session_state.proc_current_mappings.get(
+                        key, st.session_state.proc_mappings.get(key)
+                    )
                     if mapping_df is None:
                         mapping_df = propose_column_mapping(entry["df"].columns, DICTIONARY_PATH)
                     mapping = mapping_dataframe_to_dict(mapping_df)
