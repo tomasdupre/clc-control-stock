@@ -154,6 +154,12 @@ def find_available_reports():
     )
 
 
+@st.cache_data(show_spinner="Cargando corrida de la nube...")
+def load_cloud_control(archivo_control):
+    """Descarga el control de una corrida guardada en la nube (parquet)."""
+    return cloud_store.load_corrida_control(archivo_control)
+
+
 @st.cache_data(show_spinner="Cargando reporte...")
 def load_report(path_str):
     """Carga las hojas livianas del reporte. Las pesadas (movimientos) se leen aparte."""
@@ -577,23 +583,76 @@ with st.sidebar:
 
     st.divider()
 
-    reports = find_available_reports()
-    if reports:
-        report_names = [r.name for r in reports]
-        selected_name = st.selectbox("Reporte activo", report_names)
-        report_path = REPORTS_DIR / selected_name
-        mtime = pd.Timestamp(report_path.stat().st_mtime, unit="s").strftime("%d/%m/%Y %H:%M")
-        st.caption(f"Generado: {mtime}")
-        st.success("Reporte cargado")
+    # Fuentes de reporte: la NUBE (persistente, historial por cliente) o LOCAL
+    # (archivos en data/reports, que en la nube son efímeros).
+    report_path = None          # ruta local (si se usa fuente local)
+    cloud_control_full = None    # control cargado desde la nube (si se usa fuente nube)
+    report_label = None
+    cloud_on = cloud_store.is_configured()
+
+    fuente = "Nube"
+    if cloud_on:
+        fuente = st.radio("Fuente de reportes", ["Nube", "Local"], horizontal=True)
     else:
-        report_path = None
-        st.warning("Sin reporte. Ejecutá `python src/main.py` primero.")
+        fuente = "Local"
+
+    if fuente == "Nube":
+        try:
+            clientes = cloud_store.list_clientes()
+        except Exception as exc:
+            clientes = []
+            st.warning(f"No se pudo leer la nube: {exc}")
+        if clientes:
+            nombres = {c["nombre"]: c["id"] for c in clientes}
+            cli_sel = st.selectbox("Cliente", list(nombres.keys()))
+            try:
+                corridas = cloud_store.list_corridas(nombres[cli_sel])
+            except Exception:
+                corridas = []
+            if corridas:
+                def _corrida_label(c):
+                    r = c.get("resumen") or {}
+                    fecha = str(c.get("creado_en", ""))[:16].replace("T", " ")
+                    ok = r.get("total_registros_ok", "?")
+                    dif = r.get("total_registros_con_diferencia", "?")
+                    try:
+                        ok = int(ok); dif = int(dif)
+                    except Exception:
+                        pass
+                    return f"{fecha} · OK {ok} / dif {dif}"
+                opts = {_corrida_label(c): c for c in corridas}
+                corr_sel = st.selectbox("Corrida", list(opts.keys()))
+                corrida = opts[corr_sel]
+                try:
+                    cloud_control_full = load_cloud_control(corrida["archivo_control"])
+                    report_label = f"{cli_sel} · {corr_sel}"
+                    st.success("Corrida cargada desde la nube")
+                except Exception as exc:
+                    st.error(f"No se pudo cargar la corrida: {exc}")
+            else:
+                st.warning("Ese cliente todavía no tiene corridas guardadas.")
+        else:
+            st.info("Todavía no hay corridas en la nube. Generá un análisis en **Procesar**.")
+    else:
+        reports = find_available_reports()
+        if reports:
+            report_names = [r.name for r in reports]
+            selected_name = st.selectbox("Reporte activo", report_names)
+            report_path = REPORTS_DIR / selected_name
+            mtime = pd.Timestamp(report_path.stat().st_mtime, unit="s").strftime("%d/%m/%Y %H:%M")
+            st.caption(f"Generado: {mtime}")
+            report_label = selected_name
+            st.success("Reporte local cargado")
+        else:
+            st.warning("Sin reporte local en esta sesión. Generá uno en **Procesar**.")
+
+    hay_reporte = (cloud_control_full is not None and not cloud_control_full.empty) or (report_path is not None)
 
     # Las "líneas de stock inicial" (Fecha == FechaInicial) son la foto base de cada
     # producto: siempre dan diferencia 0 y no son un control real. Por defecto se ocultan
-    # para ver una línea por producto. El reporte Excel siempre las conserva.
+    # para ver una línea por producto.
     mostrar_lineas_base = False
-    if reports:
+    if hay_reporte:
         st.divider()
         mostrar_lineas_base = st.toggle(
             "Mostrar líneas de stock inicial",
@@ -612,9 +671,10 @@ with st.sidebar:
 
 # ── Sin reporte (solo bloquea páginas que lo necesitan) ───────────────────────
 
-if not report_path and page != "⚙️ Procesar":
+if not hay_reporte and page != "⚙️ Procesar":
     st.title("📦 CLC Control Inteligente de Stock")
-    st.info("No hay reporte disponible. Usá **⚙️ Procesar** para cargar archivos y generar uno.")
+    st.info("No hay reporte para mostrar. Generá un análisis en **⚙️ Procesar** "
+            "o elegí una corrida guardada en el panel izquierdo.")
     st.stop()
 
 def marcar_lineas_base(control_df):
@@ -627,10 +687,28 @@ def marcar_lineas_base(control_df):
 
 
 # En "Procesar" no se necesita el reporte: evitamos leer Excel grande en cada rerun.
-if report_path and page != "⚙️ Procesar":
-    data = load_report(str(report_path))
-    # control_full: todas las filas (lo usa la IA para explicar las dos fotos).
-    control_full = data["control_stock"]
+if hay_reporte and page != "⚙️ Procesar":
+    if cloud_control_full is not None:
+        # Reporte cargado desde la nube (parquet con la tabla de control completa).
+        # Reconstruimos las hojas que usan el chat y el detalle a partir del control.
+        control_full = cloud_control_full
+        dif_full = pd.to_numeric(control_full.get("Diferencia"), errors="coerce").fillna(0)
+        resumen_cloud = pd.DataFrame([{
+            "total_registros_controlados": len(control_full),
+            "total_registros_ok": int((control_full.get("EstadoControl") == "OK").sum()) if "EstadoControl" in control_full.columns else 0,
+            "total_registros_con_diferencia": int((dif_full != 0).sum()),
+            "total_diferencia_absoluta": pd.to_numeric(control_full.get("DiferenciaAbsoluta"), errors="coerce").fillna(0).sum(),
+        }])
+        data = {
+            "control_stock": control_full,
+            "solo_diferencias": control_full[dif_full != 0].copy(),
+            "resumen": resumen_cloud,
+            "advertencias": pd.DataFrame(),
+            "duplicados_movimientos": pd.DataFrame(),
+        }
+    else:
+        data = load_report(str(report_path))
+        control_full = data["control_stock"]
     es_base = marcar_lineas_base(control_full)
     lineas_base_ocultas = 0
     if mostrar_lineas_base:
@@ -1164,7 +1242,7 @@ if page == "⚙️ Procesar":
 
 if page == "📊 Resumen":
     st.title("📊 Resumen del Control de Stock")
-    st.caption(f"Reporte: **{report_path.name}**")
+    st.caption(f"Reporte: **{report_label or '—'}**")
     if lineas_base_ocultas:
         st.caption(
             f"Mostrando un control por producto. {lineas_base_ocultas:,} líneas de stock inicial "
@@ -1385,14 +1463,18 @@ elif page == "🔍 Detalle":
     # Movimientos no aplicados: hoja potencialmente enorme, se lee solo al pedirlo.
     st.divider()
     with st.expander("Ver movimientos no aplicados al cálculo"):
-        st.caption("Esta hoja puede tener cientos de miles de filas. Se carga solo si la pedís.")
-        if st.button("Cargar movimientos no aplicados"):
-            no_ap = load_report_sheet(str(report_path), "movimientos_no_aplicados")
-            if no_ap.empty:
-                st.info("Todos los movimientos fueron aplicados.")
-            else:
-                st.caption(f"{len(no_ap):,} movimientos no aplicados (se muestran los primeros 1.000)")
-                st.dataframe(no_ap.head(1000), use_container_width=True, hide_index=True)
+        if report_path is None:
+            st.info("El detalle de movimientos no aplicados está disponible en el reporte Excel "
+                    "(fuente Local). Desde la nube se muestra el control; descargá el Excel para el detalle.")
+        else:
+            st.caption("Esta hoja puede tener cientos de miles de filas. Se carga solo si la pedís.")
+            if st.button("Cargar movimientos no aplicados"):
+                no_ap = load_report_sheet(str(report_path), "movimientos_no_aplicados")
+                if no_ap.empty:
+                    st.info("Todos los movimientos fueron aplicados.")
+                else:
+                    st.caption(f"{len(no_ap):,} movimientos no aplicados (se muestran los primeros 1.000)")
+                    st.dataframe(no_ap.head(1000), use_container_width=True, hide_index=True)
 
     with st.expander("Ver movimientos duplicados eliminados"):
         dups = data["duplicados_movimientos"]
@@ -1416,9 +1498,10 @@ elif page == "💬 Consultar con IA":
         st.error("No se encontró ANTHROPIC_API_KEY en el archivo .env")
         st.stop()
 
-    context_key = f"ctx_{report_path.name}"
+    nombre_reporte = report_label or "reporte"
+    context_key = f"ctx_{nombre_reporte}"
     if context_key not in st.session_state:
-        st.session_state[context_key] = build_claude_context(data, report_path.name)
+        st.session_state[context_key] = build_claude_context(data, nombre_reporte)
 
     if "messages" not in st.session_state:
         st.session_state.messages = []
