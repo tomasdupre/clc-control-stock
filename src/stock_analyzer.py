@@ -257,25 +257,28 @@ def get_description_lookup(master_df):
     return dict(zip(valid_master["CodigoArticulo"], valid_master["Descripcion"]))
 
 
-def build_description_lookup(*dfs):
+def build_field_lookup(field, *dfs):
     """
-    Arma CodigoArticulo -> Descripcion combinando varias fuentes (maestro, stock,
-    movimientos). La primera fuente que aporte una descripcion no vacia para un codigo
-    es la que gana. Asi, si el maestro no tiene un codigo (por ejemplo porque usa otro
-    sistema de codigos), igual se toma la descripcion del stock o de los movimientos.
+    Arma CodigoArticulo -> <field> combinando varias fuentes. La primera fuente que
+    aporte un valor no vacio para un codigo es la que gana.
     """
     lookup = {}
     for df in dfs:
         if df is None or getattr(df, "empty", True):
             continue
-        if "CodigoArticulo" not in df.columns or "Descripcion" not in df.columns:
+        if "CodigoArticulo" not in df.columns or field not in df.columns:
             continue
         codigos = df["CodigoArticulo"].astype(str)
-        descripciones = df["Descripcion"].fillna("").astype(str).str.strip()
-        for cod, desc in zip(codigos, descripciones):
-            if cod and desc and cod not in lookup:
-                lookup[cod] = desc
+        valores = df[field].fillna("").astype(str).str.strip()
+        for cod, val in zip(codigos, valores):
+            if cod and val and cod not in lookup:
+                lookup[cod] = val
     return lookup
+
+
+def build_description_lookup(*dfs):
+    """CodigoArticulo -> Descripcion (maestro, stock o movimientos; la primera no vacia gana)."""
+    return build_field_lookup("Descripcion", *dfs)
 
 
 def get_control_initial_date(stock_df):
@@ -475,6 +478,7 @@ def calculate_control_table(
     include_initial_date_movements=False,
     required_initial_date=None,
     description_lookup=None,
+    category_lookup=None,
 ):
     """
     Calcula StockCalculado y Diferencia para cada stock informado.
@@ -485,6 +489,8 @@ def calculate_control_table(
     """
     if description_lookup is None:
         description_lookup = get_description_lookup(master_df)
+    if category_lookup is None:
+        category_lookup = {}
     initial_stock = calculate_initial_stock(stock_df, required_initial_date=required_initial_date)
 
     swi = stock_df.merge(initial_stock, on=["CodigoArticulo", "Deposito"], how="left")
@@ -546,6 +552,7 @@ def calculate_control_table(
         default="Critico",
     )
     swi["Descripcion"] = swi["CodigoArticulo"].map(description_lookup).fillna("")
+    swi["Categoria"] = swi["CodigoArticulo"].map(category_lookup).fillna("")
     if "StockFinalAsumidoCero" not in swi.columns:
         swi["StockFinalAsumidoCero"] = False
     swi["StockFinalAsumidoCero"] = swi["StockFinalAsumidoCero"].fillna(False)
@@ -561,7 +568,7 @@ def calculate_control_table(
     ]
 
     output_columns = [
-        "Fecha", "CodigoArticulo", "Descripcion", "Deposito",
+        "Fecha", "CodigoArticulo", "Descripcion", "Categoria", "Deposito",
         "FechaInicialEsperada", "FechaInicial", "StockInicial",
         "MovimientosAcumulados", "StockCalculado", "StockInformado",
         "Diferencia", "DiferenciaAbsoluta", "EstadoControl",
@@ -832,6 +839,8 @@ def run_stock_analysis(
     # Descripcion combinada: maestro primero; si un codigo no esta ahi (porque el
     # maestro usa otro sistema de codigos), se toma del stock o de los movimientos.
     description_lookup = build_description_lookup(master_df, stock_desc_source, movements_for_audit_df)
+    # Categoria (Unidad de Gestión): viene del maestro si se mapeó.
+    category_lookup = build_field_lookup("Categoria", master_df)
 
     control_df, calculation_warnings_df = calculate_control_table(
         stock_df,
@@ -840,6 +849,7 @@ def run_stock_analysis(
         include_initial_date_movements=include_initial_date_movements,
         required_initial_date=required_initial_date,
         description_lookup=description_lookup,
+        category_lookup=category_lookup,
     )
     movements_without_stock_df = get_movements_without_stock(movements_for_audit_df, stock_df)
     applied_movements_df, unapplied_movements_df = classify_movements_application(

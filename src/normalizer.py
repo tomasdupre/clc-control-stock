@@ -10,6 +10,7 @@ from movement_rules import apply_movement_rules
 MASTER_COLUMNS = [
     "CodigoArticulo",
     "Descripcion",
+    "Categoria",
 ]
 
 STOCK_COLUMNS = [

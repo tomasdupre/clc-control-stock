@@ -47,7 +47,9 @@ MOVEMENT_RULES_PATH = PROJECT_ROOT / "rules" / "reglas_movimientos.csv"
 # Campos CLC disponibles POR TIPO de hoja. Solo estos aparecen en el desplegable
 # "Campo CLC" al mapear (más PendienteConfirmacion para lo que no se usa).
 CLC_FIELDS_BY_TYPE = {
-    "maestro": ["CodigoArticulo", "Descripcion"],
+    # Categoria (Unidad de Gestión) es OPCIONAL: si está en el maestro, se usa para
+    # las visualizaciones por categoría (Balance de Masa).
+    "maestro": ["CodigoArticulo", "Descripcion", "Categoria"],
     "stock": ["CodigoArticulo", "Fecha", "StockInformado"],
     # TipoMovimiento es OPCIONAL: solo hace falta si vas a asignar signos por tipo (con IA).
     "movimientos": ["CodigoArticulo", "Fecha", "CantidadOriginal", "TipoMovimiento"],
@@ -96,7 +98,7 @@ REQUIRED_BY_TYPE = {
 
 # Campos que conviene tener pero no bloquean (solo advertencia).
 RECOMMENDED_BY_TYPE = {
-    "maestro": ["Descripcion"],
+    "maestro": ["Descripcion", "Categoria"],
     "stock": [],
     "movimientos": [],
 }
@@ -1852,6 +1854,39 @@ elif page == "📈 Visualización de datos":
             ).reset_index().sort_values("Neto")
             st.dataframe(
                 tabla.style.format({"Movimientos": "{:,.0f}", "Neto": "{:,.0f}"}),
+                use_container_width=True, hide_index=True,
+            )
+
+        # ── Tabla por Unidad de Gestión (Categoria) ───────────────────────────
+        st.divider()
+        st.markdown("**Por Unidad de Gestión (categoría)**")
+        if "Categoria" not in fin.columns or (fin["Categoria"].astype(str).str.strip() == "").all():
+            st.info(
+                "Esta corrida no tiene categoría. Mapeá la columna de **Categoria** (Unidad de "
+                "Gestión) en el maestro y re-ejecutá el análisis para ver este desglose."
+            )
+        else:
+            cat = fin.copy()
+            cat["Categoria"] = cat["Categoria"].astype(str).str.strip().replace("", "Sin categoría")
+            por_cat = cat.groupby("Categoria").agg(
+                Productos=("CodigoArticulo", "nunique"),
+                StockInformado=("StockInformado", "sum"),
+                StockCalculado=("StockCalculado", "sum"),
+                DifUnidades=("Diferencia", "sum"),
+            ).reset_index()
+            por_cat["DifPct"] = por_cat.apply(
+                lambda r: (r["DifUnidades"] / r["StockInformado"] * 100) if r["StockInformado"] else 0.0,
+                axis=1,
+            )
+            por_cat = por_cat.sort_values("DifUnidades")
+            st.dataframe(
+                por_cat.rename(columns={
+                    "Categoria": "Unidad de Gestión", "DifUnidades": "Dif. Stock Unidades",
+                    "DifPct": "Dif. Stock %",
+                }).style.format({
+                    "Productos": "{:,.0f}", "StockInformado": "{:,.0f}", "StockCalculado": "{:,.0f}",
+                    "Dif. Stock Unidades": "{:,.0f}", "Dif. Stock %": "{:.1f}%",
+                }),
                 use_container_width=True, hide_index=True,
             )
 
