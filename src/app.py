@@ -59,6 +59,30 @@ def clc_options_for(file_type):
     return CLC_FIELDS_BY_TYPE.get(file_type, []) + [PENDING_FIELD]
 
 
+# Signo manual por hoja de movimientos (a mano, sin IA).
+SIGNO_HOJA_OPCIONES = {
+    "Mantener (como viene)": "mantener",
+    "Todas entradas (+)": "entrada",
+    "Todas salidas (−)": "salida",
+}
+
+
+def aplicar_signo_hoja(norm_df, signo):
+    """
+    Aplica un signo a TODA una hoja de movimientos (elección manual del usuario).
+    'entrada' → todo positivo; 'salida' → todo negativo; 'mantener' → sin cambio
+    (respeta el signo de cada fila, ideal para ajustes + o −).
+    Se aplica a CantidadOriginal y CantidadNormalizada.
+    """
+    if signo not in ("entrada", "salida"):
+        return norm_df
+    for col in ("CantidadOriginal", "CantidadNormalizada"):
+        if col in norm_df.columns:
+            q = pd.to_numeric(norm_df[col], errors="coerce")
+            norm_df[col] = q.abs() if signo == "entrada" else -q.abs()
+    return norm_df
+
+
 # Todos los campos válidos (unión), por compatibilidad.
 VALID_CLC_FIELDS = ["CodigoArticulo", "Descripcion", "Fecha", "StockInformado", "CantidadOriginal", PENDING_FIELD]
 
@@ -874,7 +898,7 @@ if page == "⚙️ Procesar":
                         st.info("Elegí al menos una hoja para procesar este archivo.")
 
                     for hoja in hojas_sel:
-                        c1, c2 = st.columns([2, 2])
+                        c1, c2, c3 = st.columns([2, 1.5, 2])
                         c1.markdown(f"Hoja: **{hoja}**")
                         tipo_hoja = c2.selectbox(
                             "Tipo",
@@ -882,11 +906,25 @@ if page == "⚙️ Procesar":
                             key=f"tipo_{uf.name}__{hoja}",
                             label_visibility="collapsed",
                         )
+                        # Signo manual por hoja (solo para movimientos): útil cuando la hoja
+                        # es toda de un tipo (devoluciones=+, salidas=−) y vienen en positivo.
+                        signo_hoja = "mantener"
+                        if tipo_hoja == "movimientos":
+                            signo_label = c3.selectbox(
+                                "Signo",
+                                list(SIGNO_HOJA_OPCIONES.keys()),
+                                key=f"signo_{uf.name}__{hoja}",
+                                label_visibility="collapsed",
+                                help="Cómo firmar los movimientos de esta hoja. 'Mantener' respeta "
+                                     "el signo de cada fila (usalo para AJUSTES + o −).",
+                            )
+                            signo_hoja = SIGNO_HOJA_OPCIONES[signo_label]
                         entries.append({
                             "file_name": uf.name,
                             "file_bytes": file_bytes,
                             "file_type": tipo_hoja,
                             "sheet_name": hoja,
+                            "signo_hoja": signo_hoja,
                         })
 
             if st.button("Continuar →", type="primary"):
@@ -911,6 +949,7 @@ if page == "⚙️ Procesar":
                             "file_name": entry["file_name"],
                             "sheet_name": entry["sheet_name"] or "",
                             "file_type": entry["file_type"],
+                            "signo_hoja": entry.get("signo_hoja", "mantener"),
                             "df": df,
                         })
                     progress.progress(1.0, text="Archivos leídos.")
@@ -1100,6 +1139,8 @@ if page == "⚙️ Procesar":
                             norm_df = normalize_stock(df, mapping)
                         elif file_type == "movimientos":
                             norm_df = normalize_movements(df, mapping, MOVEMENT_RULES_PATH)
+                            # Signo manual elegido para esta hoja (entrada/salida/mantener).
+                            norm_df = aplicar_signo_hoja(norm_df, entry.get("signo_hoja", "mantener"))
                         else:
                             done += 1
                             continue
