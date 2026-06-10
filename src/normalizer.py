@@ -22,6 +22,7 @@ MOVEMENT_COLUMNS = [
     "Fecha",
     "CodigoArticulo",
     "CantidadOriginal",
+    "TipoMovimiento",
 ]
 
 

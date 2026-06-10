@@ -756,6 +756,37 @@ def export_control_report(
     return output_path, summary_df
 
 
+def apply_sign_by_type(movements_df, sign_map, respect_existing_negatives=True):
+    """
+    Asigna el signo de la cantidad segun el TIPO de movimiento (clasificacion que
+    el usuario confirma, propuesta por la IA). Solo se usa cuando los datos vienen
+    sin signo (todo positivo) y la direccion esta en el tipo.
+
+    sign_map: {texto exacto del tipo: +1 (ingreso) o -1 (egreso)}.
+    Tipos que no esten en el mapa quedan sin cambio.
+    Si respect_existing_negatives, las cantidades que YA vienen negativas no se tocan.
+    """
+    if not sign_map or "TipoMovimiento" not in movements_df.columns:
+        return movements_df
+    result = movements_df.copy()
+    qty = pd.to_numeric(result.get("CantidadNormalizada"), errors="coerce")
+    tipos = result["TipoMovimiento"].fillna("").astype(str).str.strip()
+    nuevos = []
+    for q, tipo in zip(qty, tipos):
+        if pd.isna(q):
+            nuevos.append(q)
+        elif respect_existing_negatives and q < 0:
+            nuevos.append(q)
+        elif sign_map.get(tipo) == -1:
+            nuevos.append(-abs(q))
+        elif sign_map.get(tipo) == 1:
+            nuevos.append(abs(q))
+        else:
+            nuevos.append(q)
+    result["CantidadNormalizada"] = nuevos
+    return result
+
+
 def run_stock_analysis(
     normalized_dir,
     reports_dir,
@@ -763,6 +794,8 @@ def run_stock_analysis(
     use_deposit=True,
     include_initial_date_movements=False,
     assume_missing_final_zero=False,
+    sign_map=None,
+    respect_existing_negatives=True,
 ):
     """Funcion principal del modulo: lee, calcula y exporta el control."""
     errors = []
@@ -771,6 +804,11 @@ def run_stock_analysis(
     stock_df = prepare_stock(data["stock"], errors)
     movements_df = prepare_movements(data["movimientos"], errors)
     master_df = prepare_master(data["maestro"], errors)
+
+    # Si el usuario confirmó una clasificación de signos por tipo, se aplica acá
+    # (sobre la cantidad informada, respetando o no los negativos del origen).
+    if sign_map:
+        movements_df = apply_sign_by_type(movements_df, sign_map, respect_existing_negatives)
 
     # Regla de integridad: NO se elimina ningun movimiento. Solo se detectan
     # posibles duplicados para informar al usuario; todos entran al calculo tal cual.

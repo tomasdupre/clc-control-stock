@@ -49,7 +49,8 @@ MOVEMENT_RULES_PATH = PROJECT_ROOT / "rules" / "reglas_movimientos.csv"
 CLC_FIELDS_BY_TYPE = {
     "maestro": ["CodigoArticulo", "Descripcion"],
     "stock": ["CodigoArticulo", "Fecha", "StockInformado"],
-    "movimientos": ["CodigoArticulo", "Fecha", "CantidadOriginal"],
+    # TipoMovimiento es OPCIONAL: solo hace falta si vas a asignar signos por tipo (con IA).
+    "movimientos": ["CodigoArticulo", "Fecha", "CantidadOriginal", "TipoMovimiento"],
 }
 
 
@@ -291,6 +292,43 @@ ADVERTENCIAS DEL SISTEMA:
 DUPLICADOS:
 {dup_str}
 """
+
+
+def clasificar_tipos_movimiento(tipos, api_key):
+    """
+    Pide a Claude clasificar cada TIPO de movimiento como ingreso/egreso/revisar.
+    Devuelve un dict {tipo_exacto: 'ingreso'|'egreso'|'revisar'}.
+    Solo manda los tipos distintos (no las filas), así es rápido y barato.
+    """
+    client = anthropic.Anthropic(api_key=api_key)
+    lista = "\n".join(f"- {t}" for t in tipos)
+    prompt = (
+        "Sos un experto en logística y control de stock. Te paso una lista de TIPOS DE "
+        "MOVIMIENTO de un sistema de inventario. Clasificá CADA UNO según su efecto en el stock:\n"
+        "- 'ingreso': aumenta el stock (ej. recepción, compra, ingreso, devolución de cliente, "
+        "ajuste positivo, alta).\n"
+        "- 'egreso': disminuye el stock (ej. venta, salida, remito de salida, despacho, "
+        "ajuste negativo, baja, consumo).\n"
+        "- 'revisar': si no estás seguro o es ambiguo.\n\n"
+        f"Tipos:\n{lista}\n\n"
+        "Respondé SOLO con un objeto JSON válido, sin texto extra, con la forma "
+        '{"<tipo exacto tal cual te lo pasé>": "ingreso"|"egreso"|"revisar", ...}.'
+    )
+    resp = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=1500,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    text = "".join(b.text for b in resp.content if b.type == "text")
+    inicio = text.find("{")
+    if inicio == -1:
+        return {}
+    try:
+        # raw_decode lee el primer objeto JSON e ignora cualquier texto extra después.
+        obj, _ = json.JSONDecoder().raw_decode(text[inicio:])
+        return obj if isinstance(obj, dict) else {}
+    except Exception:
+        return {}
 
 
 # ── Herramientas que la IA puede usar para consultar la data del reporte ───────
@@ -555,7 +593,7 @@ def reset_proc_state():
     """Reinicia el asistente de Procesar para empezar de cero con otros archivos."""
     for k in [
         "proc_step", "proc_entries", "proc_mappings", "proc_current_mappings",
-        "proc_normalized", "proc_log", "proc_result", "proc_report_name",
+        "proc_normalized", "proc_log", "proc_result", "proc_report_name", "proc_sign_class",
     ]:
         st.session_state.pop(k, None)
     st.session_state.proc_step = "upload"
@@ -882,6 +920,7 @@ if page == "⚙️ Procesar":
                         st.session_state.proc_entries = proc_entries
                         st.session_state.proc_mappings = {}
                         st.session_state.proc_current_mappings = {}
+                        st.session_state.pop("proc_sign_class", None)
                         st.session_state.proc_normalized = {"maestro": [], "stock": [], "movimientos": []}
                         st.session_state.proc_log = []
                         st.session_state.proc_step = "mapping"
@@ -1156,6 +1195,86 @@ if page == "⚙️ Procesar":
         if assume_zero:
             st.caption("Se agregarán controles para los productos ausentes de la última foto de stock (final = 0).")
 
+        # ── Asignar signos por tipo de movimiento (con IA) ────────────────────
+        st.divider()
+        sign_map = None
+        respect_neg = True
+        usar_signos_ia = st.toggle(
+            "Asignar signos por tipo de movimiento (con IA)",
+            value=False,
+            help="Para clientes cuyos movimientos vienen TODOS en positivo y la dirección "
+                 "(entra/sale) está en el tipo de movimiento. La IA propone ingreso(+)/egreso(−) "
+                 "por cada tipo y vos lo confirmás. Requiere haber mapeado 'TipoMovimiento'.",
+        )
+        if usar_signos_ia:
+            mov_path = NORMALIZED_DIR / "movimientos_normalizado.parquet"
+            tipos = []
+            if mov_path.exists():
+                mv = pd.read_parquet(mov_path)
+                if "TipoMovimiento" in mv.columns:
+                    tipos = sorted(
+                        t for t in mv["TipoMovimiento"].fillna("").astype(str).str.strip().unique() if t
+                    )
+            if not tipos:
+                st.warning(
+                    "No hay tipos de movimiento. Volvé al mapeo y asigná la columna de tipo "
+                    "de movimiento al campo **TipoMovimiento** en la(s) hoja(s) de movimientos."
+                )
+            else:
+                if st.button("🤖 Clasificar tipos con IA"):
+                    api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
+                    if not api_key:
+                        st.error("Falta ANTHROPIC_API_KEY (definila en .env o en los secrets).")
+                    else:
+                        with st.spinner("Clasificando tipos de movimiento..."):
+                            try:
+                                clas = clasificar_tipos_movimiento(tipos, api_key)
+                            except Exception as exc:
+                                clas = {}
+                                st.error(f"No se pudo clasificar: {exc}")
+                        st.session_state.proc_sign_class = pd.DataFrame({
+                            "TipoMovimiento": tipos,
+                            "Direccion": [str(clas.get(t, "revisar")).lower() for t in tipos],
+                        })
+
+                # Inicializar la tabla si no existe o si cambiaron los tipos
+                actual = st.session_state.get("proc_sign_class")
+                if actual is None or set(actual["TipoMovimiento"]) != set(tipos):
+                    st.session_state.proc_sign_class = pd.DataFrame({
+                        "TipoMovimiento": tipos,
+                        "Direccion": ["revisar"] * len(tipos),
+                    })
+
+                st.caption("Revisá/corregí cada tipo: **ingreso** (+), **egreso** (−) o **revisar** (no toca el signo).")
+                edit_clas = st.data_editor(
+                    st.session_state.proc_sign_class,
+                    column_config={
+                        "TipoMovimiento": st.column_config.TextColumn("Tipo de movimiento", disabled=True),
+                        "Direccion": st.column_config.SelectboxColumn(
+                            "Dirección", options=["ingreso", "egreso", "revisar"],
+                        ),
+                    },
+                    hide_index=True,
+                    use_container_width=True,
+                    key="editor_signos",
+                )
+                respect_neg = st.checkbox(
+                    "Respetar movimientos que ya vienen con signo negativo", value=True,
+                    help="Si está activado, los movimientos que ya vienen negativos no se tocan; "
+                         "la IA solo asigna signo a los positivos.",
+                )
+                sign_map = {}
+                for _, r in edit_clas.iterrows():
+                    d = str(r["Direccion"]).strip().lower()
+                    tipo = str(r["TipoMovimiento"]).strip()
+                    if d == "ingreso":
+                        sign_map[tipo] = 1
+                    elif d == "egreso":
+                        sign_map[tipo] = -1
+                ing = sum(1 for v in sign_map.values() if v == 1)
+                egr = sum(1 for v in sign_map.values() if v == -1)
+                st.caption(f"Clasificados: **{ing}** ingreso(s), **{egr}** egreso(s), **{len(tipos) - ing - egr}** a revisar (sin cambio).")
+
         col_back, col_run = st.columns([1, 4])
         if col_back.button("← Volver al mapeo"):
             st.session_state.proc_step = "mapping"
@@ -1177,6 +1296,8 @@ if page == "⚙️ Procesar":
                         use_deposit=use_deposit,
                         include_initial_date_movements=include_initial,
                         assume_missing_final_zero=assume_zero,
+                        sign_map=sign_map if usar_signos_ia else None,
+                        respect_existing_negatives=respect_neg,
                     )
                     controlados = int(result["summary_df"].iloc[0]["total_registros_controlados"])
                     st.write(f"✅ Control calculado: {controlados:,} registros. Excel guardado.")
@@ -1196,6 +1317,8 @@ if page == "⚙️ Procesar":
                                     "use_deposit": use_deposit,
                                     "include_initial_date_movements": include_initial,
                                     "assume_missing_final_zero": assume_zero,
+                                    "signos_por_tipo_ia": bool(usar_signos_ia and sign_map),
+                                    "respetar_negativos": respect_neg,
                                 },
                                 resumen={k: _to_py(v) for k, v in result["summary_df"].iloc[0].to_dict().items()},
                                 control_df=result["control_df"],
