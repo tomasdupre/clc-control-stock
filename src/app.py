@@ -195,6 +195,25 @@ def load_cloud_control(archivo_control):
     return cloud_store.load_corrida_control(archivo_control)
 
 
+@st.cache_data(show_spinner="Cargando movimientos...")
+def load_viz_movimientos(cloud_archivo_control_param):
+    """
+    Movimientos para las visualizaciones: de la nube (si la corrida los guardó) o,
+    en su defecto, del normalizado local. Devuelve DataFrame (puede estar vacío).
+    """
+    if cloud_archivo_control_param:
+        df = cloud_store.load_corrida_movimientos(cloud_archivo_control_param)
+        if df is not None and not df.empty:
+            return df
+    p = NORMALIZED_DIR / "movimientos_normalizado.parquet"
+    if p.exists():
+        try:
+            return pd.read_parquet(p)
+        except Exception:
+            return pd.DataFrame()
+    return pd.DataFrame()
+
+
 @st.cache_data(show_spinner="Cargando reporte...")
 def load_report(path_str):
     """Carga las hojas livianas del reporte. Las pesadas (movimientos) se leen aparte."""
@@ -642,7 +661,7 @@ with st.sidebar:
 
     page = st.radio(
         "Navegación",
-        ["⚙️ Procesar", "📊 Resumen", "🔍 Detalle", "💬 Consultar con IA"],
+        ["⚙️ Procesar", "📊 Resumen", "🔍 Detalle", "📈 Visualización de datos", "💬 Consultar con IA"],
         label_visibility="collapsed",
     )
 
@@ -660,6 +679,7 @@ with st.sidebar:
     # (archivos en data/reports, que en la nube son efímeros).
     report_path = None          # ruta local (si se usa fuente local)
     cloud_control_full = None    # control cargado desde la nube (si se usa fuente nube)
+    cloud_archivo_control = None  # ruta del control en la nube (para cargar sus movimientos)
     report_label = None
     cloud_on = cloud_store.is_configured()
 
@@ -698,6 +718,7 @@ with st.sidebar:
                 corrida = opts[corr_sel]
                 try:
                     cloud_control_full = load_cloud_control(corrida["archivo_control"])
+                    cloud_archivo_control = corrida["archivo_control"]
                     report_label = f"{cli_sel} · {corr_sel}"
                     st.success("Corrida cargada desde la nube")
                 except Exception as exc:
@@ -1393,6 +1414,7 @@ if page == "⚙️ Procesar":
                                 control_df=result["control_df"],
                                 xlsx_path=str(result["output_path"]),
                                 diagnostico_path=str(diag_path),
+                                movimientos_path=str(NORMALIZED_DIR / "movimientos_normalizado.parquet"),
                             )
                             st.write("✅ Corrida guardada en la nube.")
                         except Exception as cloud_exc:
@@ -1708,6 +1730,121 @@ elif page == "🔍 Detalle":
         else:
             st.caption(f"{len(dups):,} filas eliminadas antes del cálculo")
             st.dataframe(dups, use_container_width=True, hide_index=True)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PÁGINA: VISUALIZACIÓN DE DATOS
+# ══════════════════════════════════════════════════════════════════════════════
+
+elif page == "📈 Visualización de datos":
+    st.title("📈 Visualización de datos")
+    viz = st.selectbox("Visualización", ["Balance de Masa"])
+
+    if viz == "Balance de Masa":
+        st.subheader("⚖️ Balance de Masa")
+        st.caption(f"Reporte: **{report_label or '—'}**")
+
+        if control_full.empty:
+            st.warning("No hay datos de control para mostrar.")
+            st.stop()
+
+        # ── Totales de stock (desde el control) ───────────────────────────────
+        cf = control_full.copy()
+        cf["Fecha_dt"] = pd.to_datetime(cf["Fecha"], errors="coerce")
+        fecha_inicial = cf["Fecha_dt"].min()
+        fecha_final = cf["Fecha_dt"].max()
+        fin = cf[cf["Fecha_dt"] == fecha_final].copy()
+        for c in ["StockInicial", "MovimientosAcumulados", "StockCalculado", "StockInformado", "Diferencia"]:
+            fin[c] = pd.to_numeric(fin.get(c), errors="coerce").fillna(0)
+        stock_inicial = fin["StockInicial"].sum()
+        mov_netos = fin["MovimientosAcumulados"].sum()
+        stock_final_calc = fin["StockCalculado"].sum()
+        stock_final_foto = fin["StockInformado"].sum()
+        dif_unidades = stock_final_foto - stock_final_calc
+        dif_pct = (dif_unidades / stock_final_foto * 100) if stock_final_foto else 0.0
+
+        f_ini = fecha_inicial.date().isoformat() if pd.notna(fecha_inicial) else "—"
+        f_fin = fecha_final.date().isoformat() if pd.notna(fecha_final) else "—"
+
+        # ── Movimientos (para el desglose por tipo y por mes) ──────────────────
+        mov = load_viz_movimientos(cloud_archivo_control)
+        hay_mov = not mov.empty
+        if hay_mov:
+            mov = mov.copy()
+            mov["Cantidad"] = pd.to_numeric(mov.get("CantidadNormalizada"), errors="coerce").fillna(0)
+            tipo = mov.get("TipoMovimiento", pd.Series("", index=mov.index)).fillna("").astype(str).str.strip()
+            hoja = mov.get("HojaOrigen", pd.Series("", index=mov.index)).fillna("").astype(str).str.strip()
+            mov["Tipo"] = tipo.where(tipo != "", hoja).replace("", "Sin tipo")
+            mov["Fecha_dt"] = pd.to_datetime(mov.get("Fecha"), errors="coerce")
+
+            tipos_disp = sorted(mov["Tipo"].unique().tolist())
+            sel_tipos = st.multiselect("Tipo de movimiento", tipos_disp, default=tipos_disp)
+            mov_f = mov[mov["Tipo"].isin(sel_tipos)] if sel_tipos else mov
+        else:
+            mov_f = pd.DataFrame()
+
+        # ── KPIs ──────────────────────────────────────────────────────────────
+        st.divider()
+        a1, a2, a3, a4 = st.columns(4)
+        a1.metric(f"Stock Inicial ({f_ini})", f"{stock_inicial:,.0f}")
+        a2.metric("Movimientos Netos", f"{mov_netos:,.0f}")
+        a3.metric(f"Stock Final foto ({f_fin})", f"{stock_final_foto:,.0f}")
+        a4.metric("Stock Final Calculado", f"{stock_final_calc:,.0f}")
+
+        b1, b2, b3, b4 = st.columns(4)
+        b1.metric("Dif. Stock Unidades", f"{dif_unidades:,.0f}", delta_color="inverse")
+        b2.metric("Dif. Stock %", f"{dif_pct:.2f}%", delta_color="inverse")
+        if hay_mov:
+            b3.metric("Cantidad de Movimientos", f"{len(mov_f):,}")
+            b4.metric("Productos Movidos", f"{mov_f['CodigoArticulo'].nunique():,}")
+
+        st.divider()
+
+        if not hay_mov:
+            st.info(
+                "El desglose por tipo de movimiento y por mes no está disponible para esta corrida "
+                "(se guarda al ejecutar el análisis). Volvé a ejecutar el análisis del cliente para verlo."
+            )
+        else:
+            col_izq, col_der = st.columns([3, 2])
+
+            with col_izq:
+                st.markdown("**Movimientos por tipo** (verde suma stock, rojo lo resta)")
+                desglose = (
+                    mov_f.groupby("Tipo")["Cantidad"].sum().reset_index().sort_values("Cantidad")
+                )
+                desglose["Color"] = desglose["Cantidad"].apply(lambda v: "Ingreso" if v >= 0 else "Egreso")
+                fig = px.bar(
+                    desglose, x="Cantidad", y="Tipo", orientation="h",
+                    color="Color", color_discrete_map={"Ingreso": "#28a745", "Egreso": "#dc3545"},
+                    text="Cantidad",
+                )
+                fig.update_traces(texttemplate="%{text:,.0f}")
+                fig.update_layout(showlegend=False, margin=dict(t=10, b=10), yaxis_title="", xaxis_title="")
+                st.plotly_chart(fig, use_container_width=True)
+
+            with col_der:
+                st.markdown("**Stock acumulado por mes**")
+                mov_f2 = mov_f.dropna(subset=["Fecha_dt"]).copy()
+                mov_f2["Mes"] = mov_f2["Fecha_dt"].dt.to_period("M").astype(str)
+                mensual = mov_f2.groupby("Mes")["Cantidad"].sum().reset_index()
+                mensual["Acumulado"] = mensual["Cantidad"].cumsum()
+                st.dataframe(
+                    mensual.rename(columns={"Mes": "Mes-Año", "Cantidad": "Movimientos del mes"})
+                           .style.format({"Movimientos del mes": "{:,.0f}", "Acumulado": "{:,.0f}"}),
+                    use_container_width=True, hide_index=True,
+                )
+
+            st.divider()
+            st.markdown("**Detalle del desglose por tipo**")
+            tabla = mov_f.groupby("Tipo").agg(
+                Movimientos=("Cantidad", "count"),
+                Neto=("Cantidad", "sum"),
+            ).reset_index().sort_values("Neto")
+            st.dataframe(
+                tabla.style.format({"Movimientos": "{:,.0f}", "Neto": "{:,.0f}"}),
+                use_container_width=True, hide_index=True,
+            )
 
 
 # ══════════════════════════════════════════════════════════════════════════════

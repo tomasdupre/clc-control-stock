@@ -102,10 +102,10 @@ def _upload_bytes(path, data, content_type):
 
 
 def save_corrida(nombre_cliente, parametros, resumen, control_df,
-                 xlsx_path=None, diagnostico_path=None, nota=""):
+                 xlsx_path=None, diagnostico_path=None, nota="", movimientos_path=None):
     """
     Guarda una corrida completa en la nube:
-      - sube el control (parquet), el xlsx y el diagnóstico al Storage,
+      - sube el control (parquet), el xlsx, el diagnóstico y los movimientos al Storage,
       - inserta la fila en `corridas` con parámetros y KPIs.
     Devuelve el id de la corrida.
     """
@@ -119,6 +119,11 @@ def save_corrida(nombre_cliente, parametros, resumen, control_df,
     archivo_control = _upload_bytes(
         f"{prefijo}/control.parquet", buf.getvalue(), "application/octet-stream"
     )
+
+    # Movimientos normalizados (para visualizaciones como Balance de Masa).
+    if movimientos_path and os.path.exists(movimientos_path):
+        with open(movimientos_path, "rb") as fh:
+            _upload_bytes(f"{prefijo}/movimientos.parquet", fh.read(), "application/octet-stream")
 
     archivo_xlsx = None
     if xlsx_path and os.path.exists(xlsx_path):
@@ -167,6 +172,22 @@ def load_corrida_control(archivo_control):
     client = get_client()
     data = client.storage.from_(BUCKET).download(archivo_control)
     return pd.read_parquet(io.BytesIO(data))
+
+
+def load_corrida_movimientos(archivo_control):
+    """
+    Descarga los movimientos normalizados de una corrida (si fueron guardados).
+    La ruta se deriva del control (mismo prefijo). Devuelve DataFrame vacío si no existe.
+    """
+    if not archivo_control:
+        return pd.DataFrame()
+    path = archivo_control.rsplit("/", 1)[0] + "/movimientos.parquet"
+    try:
+        client = get_client()
+        data = client.storage.from_(BUCKET).download(path)
+        return pd.read_parquet(io.BytesIO(data))
+    except Exception:
+        return pd.DataFrame()
 
 
 def download_file(path):
