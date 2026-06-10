@@ -154,7 +154,7 @@ def list_corridas(cliente_id):
     client = get_client()
     res = (
         client.table("corridas")
-        .select("id,creado_en,parametros,resumen,archivo_reporte_xlsx,archivo_diagnostico,nota")
+        .select("id,creado_en,parametros,resumen,archivo_control,archivo_reporte_xlsx,archivo_diagnostico,nota")
         .eq("cliente_id", cliente_id)
         .order("creado_en", desc=True)
         .execute()
