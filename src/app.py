@@ -305,14 +305,15 @@ def clasificar_tipos_movimiento(tipos, api_key):
     prompt = (
         "Sos un experto en logística y control de stock. Te paso una lista de TIPOS DE "
         "MOVIMIENTO de un sistema de inventario. Clasificá CADA UNO según su efecto en el stock:\n"
-        "- 'ingreso': aumenta el stock (ej. recepción, compra, ingreso, devolución de cliente, "
-        "ajuste positivo, alta).\n"
-        "- 'egreso': disminuye el stock (ej. venta, salida, remito de salida, despacho, "
-        "ajuste negativo, baja, consumo).\n"
+        "- 'ingreso': SIEMPRE aumenta el stock (ej. recepción, compra, alta, devolución de cliente).\n"
+        "- 'egreso': SIEMPRE disminuye el stock (ej. venta, salida, remito de salida, despacho, baja, consumo).\n"
+        "- 'mantener': tipos que pueden aumentar O disminuir según el caso. El típico es "
+        "'AJUSTE' / 'Ajuste de inventario' (puede ser positivo o negativo). Para estos se respeta "
+        "el signo que ya trae cada movimiento, no se fuerza una dirección.\n"
         "- 'revisar': si no estás seguro o es ambiguo.\n\n"
         f"Tipos:\n{lista}\n\n"
         "Respondé SOLO con un objeto JSON válido, sin texto extra, con la forma "
-        '{"<tipo exacto tal cual te lo pasé>": "ingreso"|"egreso"|"revisar", ...}.'
+        '{"<tipo exacto tal cual te lo pasé>": "ingreso"|"egreso"|"mantener"|"revisar", ...}.'
     )
     resp = client.messages.create(
         model="claude-haiku-4-5-20251001",
@@ -1245,13 +1246,17 @@ if page == "⚙️ Procesar":
                         "Direccion": ["revisar"] * len(tipos),
                     })
 
-                st.caption("Revisá/corregí cada tipo: **ingreso** (+), **egreso** (−) o **revisar** (no toca el signo).")
+                st.caption(
+                    "Revisá/corregí cada tipo: **ingreso** (+), **egreso** (−), "
+                    "**mantener** (respeta el signo de cada fila — usalo para AJUSTES, que pueden ser + o −) "
+                    "o **revisar** (no toca el signo)."
+                )
                 edit_clas = st.data_editor(
                     st.session_state.proc_sign_class,
                     column_config={
                         "TipoMovimiento": st.column_config.TextColumn("Tipo de movimiento", disabled=True),
                         "Direccion": st.column_config.SelectboxColumn(
-                            "Dirección", options=["ingreso", "egreso", "revisar"],
+                            "Dirección", options=["ingreso", "egreso", "mantener", "revisar"],
                         ),
                     },
                     hide_index=True,
@@ -1264,6 +1269,7 @@ if page == "⚙️ Procesar":
                          "la IA solo asigna signo a los positivos.",
                 )
                 sign_map = {}
+                n_mantener = 0
                 for _, r in edit_clas.iterrows():
                     d = str(r["Direccion"]).strip().lower()
                     tipo = str(r["TipoMovimiento"]).strip()
@@ -1271,9 +1277,15 @@ if page == "⚙️ Procesar":
                         sign_map[tipo] = 1
                     elif d == "egreso":
                         sign_map[tipo] = -1
+                    elif d == "mantener":
+                        n_mantener += 1
                 ing = sum(1 for v in sign_map.values() if v == 1)
                 egr = sum(1 for v in sign_map.values() if v == -1)
-                st.caption(f"Clasificados: **{ing}** ingreso(s), **{egr}** egreso(s), **{len(tipos) - ing - egr}** a revisar (sin cambio).")
+                revisar = len(tipos) - ing - egr - n_mantener
+                st.caption(
+                    f"Clasificados: **{ing}** ingreso(s), **{egr}** egreso(s), "
+                    f"**{n_mantener}** mantener (respeta signo), **{revisar}** a revisar (sin cambio)."
+                )
 
         col_back, col_run = st.columns([1, 4])
         if col_back.button("← Volver al mapeo"):
