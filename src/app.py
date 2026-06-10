@@ -1328,7 +1328,7 @@ if page == "📊 Resumen":
         ]
         cols_ok = [c for c in cols_show if c in diffs.columns]
         st.dataframe(
-            diffs[cols_ok].style.map(color_estado, subset=["EstadoControl"]),
+            diffs[cols_ok].style.map(color_estado, subset=["EstadoControl"]).format(precision=2),
             use_container_width=True,
             hide_index=True,
         )
@@ -1386,7 +1386,7 @@ elif page == "🔍 Detalle":
     cols_ok = [c for c in cols_show if c in filtrado.columns]
 
     st.dataframe(
-        filtrado[cols_ok].style.map(color_estado, subset=["EstadoControl"]),
+        filtrado[cols_ok].style.map(color_estado, subset=["EstadoControl"]).format(precision=2),
         use_container_width=True,
         hide_index=True,
     )
