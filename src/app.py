@@ -200,17 +200,19 @@ def load_viz_movimientos(cloud_archivo_control_param):
     """
     Movimientos para las visualizaciones: de la nube (si la corrida los guardó) o,
     en su defecto, del normalizado local. Devuelve DataFrame (puede estar vacío).
+    Nunca lanza error: ante cualquier problema devuelve vacío (la página muestra
+    solo los KPIs).
     """
-    if cloud_archivo_control_param:
-        df = cloud_store.load_corrida_movimientos(cloud_archivo_control_param)
-        if df is not None and not df.empty:
-            return df
-    p = NORMALIZED_DIR / "movimientos_normalizado.parquet"
-    if p.exists():
-        try:
+    try:
+        if cloud_archivo_control_param and hasattr(cloud_store, "load_corrida_movimientos"):
+            df = cloud_store.load_corrida_movimientos(cloud_archivo_control_param)
+            if df is not None and not df.empty:
+                return df
+        p = NORMALIZED_DIR / "movimientos_normalizado.parquet"
+        if p.exists():
             return pd.read_parquet(p)
-        except Exception:
-            return pd.DataFrame()
+    except Exception:
+        pass
     return pd.DataFrame()
 
 
