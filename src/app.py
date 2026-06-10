@@ -198,16 +198,23 @@ def load_cloud_control(archivo_control):
 @st.cache_data(show_spinner="Cargando movimientos...")
 def load_viz_movimientos(cloud_archivo_control_param):
     """
-    Movimientos para las visualizaciones: de la nube (si la corrida los guardó) o,
-    en su defecto, del normalizado local. Devuelve DataFrame (puede estar vacío).
-    Nunca lanza error: ante cualquier problema devuelve vacío (la página muestra
-    solo los KPIs).
+    Movimientos para las visualizaciones.
+
+    - En modo NUBE: SOLO los movimientos de ESA corrida (nunca los locales, que
+      pertenecen a otro cliente y mezclarían los datos).
+    - En modo LOCAL: del normalizado local (que corresponde al reporte local activo).
+
+    Nunca lanza error: ante cualquier problema devuelve vacío (la página muestra solo KPIs).
     """
     try:
-        if cloud_archivo_control_param and hasattr(cloud_store, "load_corrida_movimientos"):
-            df = cloud_store.load_corrida_movimientos(cloud_archivo_control_param)
-            if df is not None and not df.empty:
-                return df
+        if cloud_archivo_control_param:
+            # Modo nube: solo lo guardado en la corrida. Sin fallback local.
+            if hasattr(cloud_store, "load_corrida_movimientos"):
+                df = cloud_store.load_corrida_movimientos(cloud_archivo_control_param)
+                if df is not None and not df.empty:
+                    return df
+            return pd.DataFrame()
+        # Modo local
         p = NORMALIZED_DIR / "movimientos_normalizado.parquet"
         if p.exists():
             return pd.read_parquet(p)
