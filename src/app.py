@@ -734,6 +734,19 @@ with st.sidebar:
                  "diferencia 0). Ocultas, ves un control real por producto.",
         )
 
+    # Opción de análisis disponible desde el panel izquierdo (se aplica al ejecutar
+    # el análisis en Procesar). Por defecto False (stock inicial = cierre del período).
+    incluir_mov_inicial = False
+    if page == "⚙️ Procesar":
+        st.divider()
+        st.markdown("**Opciones de análisis**")
+        incluir_mov_inicial = st.toggle(
+            "Incluir movimientos de la fecha inicial",
+            value=False,
+            help="Activalo si el stock inicial es apertura del día (suma los movimientos de "
+                 "esa misma fecha). Desactivado: stock inicial = cierre del período.",
+        )
+
     st.divider()
     if cloud_store.is_configured():
         st.caption("☁️ Nube: conectada")
@@ -1212,20 +1225,23 @@ if page == "⚙️ Procesar":
         st.divider()
         st.subheader("Configurar análisis de stock")
 
-        col1, col2, col3 = st.columns(3)
+        col1, col2 = st.columns(2)
         cliente = col1.text_input("Nombre del cliente (para el reporte)", placeholder="ej. Palacio")
         use_deposit = col2.toggle("El depósito importa", value=False)
-        include_initial = col3.toggle("Incluir movimientos de la fecha inicial", value=False)
 
         if use_deposit:
             col2.caption("Calcula por CodigoArticulo + Deposito")
         else:
             col2.caption("Agrupa todo por CodigoArticulo")
 
-        if include_initial:
-            col3.caption("Stock inicial = apertura del día")
-        else:
-            col3.caption("Stock inicial = cierre del período")
+        # "Incluir movimientos de la fecha inicial" se controla desde el panel izquierdo.
+        include_initial = incluir_mov_inicial
+        st.caption(
+            "ℹ️ *Incluir movimientos de la fecha inicial*: "
+            + ("**ACTIVADO** (stock inicial = apertura del día)" if include_initial
+               else "**desactivado** (stock inicial = cierre del período)")
+            + " — se cambia desde el panel izquierdo."
+        )
 
         assume_zero = st.toggle(
             "Controlar productos sin foto final asumiendo stock 0",
