@@ -1250,8 +1250,13 @@ if page == "📊 Resumen":
         )
     st.divider()
 
+    # Diferencia porcentual: cuánto se desvía el stock calculado del informado,
+    # como % del stock informado final (sum |diferencia| / sum stock informado).
+    total_informado = pd.to_numeric(control.get("StockInformado"), errors="coerce").fillna(0).sum() if not control.empty else 0
+    dif_pct = (abs_diff / total_informado * 100) if total_informado else 0.0
+
     # KPIs
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Total controlados", f"{total:,}")
     c2.metric("Registros OK", f"{ok_count:,}", f"{pct_ok:.1f}%")
     c3.metric(
@@ -1261,6 +1266,12 @@ if page == "📊 Resumen":
         delta_color="inverse",
     )
     c4.metric("Diferencia absoluta", f"{abs_diff:,.0f} u.")
+    c5.metric(
+        "Diferencia %",
+        f"{dif_pct:.2f}%",
+        help="Diferencia entre stock calculado e informado, como porcentaje del stock "
+             "informado final (diferencia absoluta total ÷ stock informado total).",
+    )
 
     st.divider()
 
