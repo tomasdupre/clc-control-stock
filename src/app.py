@@ -786,58 +786,58 @@ if page == "⚙️ Procesar":
                 file_bytes = uf.getvalue()
                 is_excel = uf.name.lower().endswith((".xlsx", ".xls"))
                 with st.expander(f"📄 {uf.name}", expanded=True):
-                    col_tipo, col_hoja = st.columns(2)
-                    file_type = col_tipo.selectbox(
-                        "Tipo de archivo",
-                        ["stock", "movimientos", "maestro", "saltar"],
-                        key=f"tipo_{uf.name}",
-                    )
-                    sheet_name = None
-                    if is_excel and file_type != "saltar":
-                        try:
-                            sheets = get_sheet_names_cached(uf.name, len(file_bytes), file_bytes)
-                            if len(sheets) == 1:
-                                sheet_name = sheets[0]
-                                col_hoja.info(f"Hoja: {sheet_name}")
-                            else:
-                                sheet_name = col_hoja.selectbox(
-                                    "Hoja a procesar", sheets, key=f"hoja_{uf.name}",
-                                )
-                        except Exception as e:
-                            st.warning(f"No se pudieron leer las hojas: {e}")
-
-                    # ¿Procesar otra hoja del mismo archivo como otro tipo?
-                    if is_excel and file_type != "saltar":
-                        if st.checkbox(
-                            "Procesar otra hoja de este archivo como otro tipo",
-                            key=f"extra_{uf.name}",
-                        ):
-                            col_t2, col_h2 = st.columns(2)
-                            file_type_2 = col_t2.selectbox(
-                                "Tipo (segunda hoja)",
-                                ["stock", "movimientos", "maestro"],
-                                key=f"tipo2_{uf.name}",
-                            )
-                            try:
-                                sheets2 = get_sheet_names_cached(uf.name, len(file_bytes), file_bytes)
-                                sheet_name_2 = col_h2.selectbox(
-                                    "Hoja (segunda)", sheets2, key=f"hoja2_{uf.name}",
-                                )
-                            except Exception:
-                                sheet_name_2 = None
+                    if not is_excel:
+                        # CSV: una sola "hoja"
+                        file_type = st.selectbox(
+                            "Tipo de archivo",
+                            ["stock", "movimientos", "maestro", "saltar"],
+                            key=f"tipo_{uf.name}",
+                        )
+                        if file_type != "saltar":
                             entries.append({
                                 "file_name": uf.name,
                                 "file_bytes": file_bytes,
-                                "file_type": file_type_2,
-                                "sheet_name": sheet_name_2,
+                                "file_type": file_type,
+                                "sheet_name": None,
                             })
+                        continue
 
-                    entries.append({
-                        "file_name": uf.name,
-                        "file_bytes": file_bytes,
-                        "file_type": file_type,
-                        "sheet_name": sheet_name,
-                    })
+                    # Excel: se pueden elegir TODAS las hojas que se quieran,
+                    # y asignarle un tipo a cada una (stock / movimientos / maestro).
+                    try:
+                        sheets = get_sheet_names_cached(uf.name, len(file_bytes), file_bytes)
+                    except Exception as e:
+                        st.warning(f"No se pudieron leer las hojas: {e}")
+                        sheets = []
+
+                    if not sheets:
+                        continue
+
+                    hojas_sel = st.multiselect(
+                        "Hojas a procesar (podés elegir varias)",
+                        sheets,
+                        default=sheets[:1],
+                        key=f"hojas_{uf.name}",
+                        help="Elegí cada hoja que quieras analizar. A cada una le asignás su tipo abajo.",
+                    )
+                    if not hojas_sel:
+                        st.info("Elegí al menos una hoja para procesar este archivo.")
+
+                    for hoja in hojas_sel:
+                        c1, c2 = st.columns([2, 2])
+                        c1.markdown(f"Hoja: **{hoja}**")
+                        tipo_hoja = c2.selectbox(
+                            "Tipo",
+                            ["stock", "movimientos", "maestro"],
+                            key=f"tipo_{uf.name}__{hoja}",
+                            label_visibility="collapsed",
+                        )
+                        entries.append({
+                            "file_name": uf.name,
+                            "file_bytes": file_bytes,
+                            "file_type": tipo_hoja,
+                            "sheet_name": hoja,
+                        })
 
             if st.button("Continuar →", type="primary"):
                 ok = False
