@@ -149,7 +149,17 @@ def export_normalized(df, file_type, output_dir):
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / NORMALIZED_FILE_NAMES[file_type]
-    # Todo a texto en columnas object mixtas evita errores de parquet por tipos
-    # inconsistentes; el análisis re-parsea fechas y números al leer.
-    df.to_parquet(output_path, index=False)
+
+    # Las columnas de texto/identificador (dtype object) pueden traer tipos
+    # mezclados: por ejemplo depositos que son numeros ('5') y otros que son
+    # texto ('1DA00701'), o fechas guardadas como objetos date. Parquet necesita
+    # un tipo unico por columna; si no, falla al inferirlo. Las pasamos todas a
+    # texto. Las columnas numericas (StockInformado, cantidades) quedan como estan.
+    # El analisis re-parsea fechas y numeros al leer, asi que esto no afecta el calculo.
+    safe = df.copy()
+    for col in safe.columns:
+        if safe[col].dtype == object:
+            safe[col] = safe[col].fillna("").astype(str)
+
+    safe.to_parquet(output_path, index=False)
     return output_path
