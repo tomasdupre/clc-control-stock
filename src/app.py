@@ -1846,10 +1846,18 @@ elif page == "📈 Visualización de datos":
 
             with col_der:
                 st.markdown("**Stock acumulado por mes**")
+                st.caption("Acumulado = Stock Inicial + movimientos del período acumulados. El último mes cierra en el Stock Final Calculado.")
                 mov_f2 = mov_f.dropna(subset=["Fecha_dt"]).copy()
+                # Solo el período controlado (posterior a la foto inicial, hasta la final)
+                # y productos que están en el control, para que el acumulado arranque en el
+                # Stock Inicial y cierre en el Stock Final Calculado.
+                productos_control = set(cf["CodigoArticulo"].astype(str))
+                en_periodo = (mov_f2["Fecha_dt"] > fecha_inicial) & (mov_f2["Fecha_dt"] <= fecha_final)
+                en_control = mov_f2["CodigoArticulo"].astype(str).isin(productos_control)
+                mov_f2 = mov_f2[en_periodo & en_control]
                 mov_f2["Mes"] = mov_f2["Fecha_dt"].dt.to_period("M").astype(str)
                 mensual = mov_f2.groupby("Mes")["Cantidad"].sum().reset_index()
-                mensual["Acumulado"] = mensual["Cantidad"].cumsum()
+                mensual["Acumulado"] = stock_inicial + mensual["Cantidad"].cumsum()
                 st.dataframe(
                     mensual.rename(columns={"Mes": "Mes-Año", "Cantidad": "Movimientos del mes"})
                            .style.format({"Movimientos del mes": "{:,.0f}", "Acumulado": "{:,.0f}"}),
