@@ -87,22 +87,34 @@ def parse_date_series(series):
 
 
 def read_normalized_files(normalized_dir):
-    """Lee los tres archivos normalizados que alimentan el control de stock."""
+    """
+    Lee los archivos normalizados que alimentan el control.
+
+    El STOCK es obligatorio (sin stock no hay nada que controlar).
+    MOVIMIENTOS y MAESTRO son opcionales: si faltan, se usan tablas vacías. Así la
+    app sirve para clientes sin maestro de productos, o que solo comparan dos fotos
+    de stock sin detalle de movimientos.
+    """
     normalized_dir = Path(normalized_dir)
-    paths = {
-        "stock": normalized_dir / STOCK_FILE,
-        "movimientos": normalized_dir / MOVEMENTS_FILE,
-        "maestro": normalized_dir / MASTER_FILE,
-    }
+    stock_path = normalized_dir / STOCK_FILE
+    if not stock_path.exists():
+        raise FileNotFoundError(f"Falta el archivo de stock normalizado: {stock_path}")
 
-    missing_files = [str(path) for path in paths.values() if not path.exists()]
-    if missing_files:
-        raise FileNotFoundError("Faltan archivos normalizados: " + ", ".join(missing_files))
-
+    mov_path = normalized_dir / MOVEMENTS_FILE
+    master_path = normalized_dir / MASTER_FILE
+    movimientos = (
+        pd.read_parquet(mov_path) if mov_path.exists()
+        else pd.DataFrame(columns=["Fecha", "CodigoArticulo", "CantidadOriginal",
+                                    "CantidadNormalizada", "TipoMovimiento"])
+    )
+    maestro = (
+        pd.read_parquet(master_path) if master_path.exists()
+        else pd.DataFrame(columns=["CodigoArticulo", "Descripcion", "Categoria"])
+    )
     return {
-        "stock": pd.read_parquet(paths["stock"]),
-        "movimientos": pd.read_parquet(paths["movimientos"]),
-        "maestro": pd.read_parquet(paths["maestro"]),
+        "stock": pd.read_parquet(stock_path),
+        "movimientos": movimientos,
+        "maestro": maestro,
     }
 
 

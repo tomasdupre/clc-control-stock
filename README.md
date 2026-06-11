@@ -412,6 +412,24 @@ Venta,Salida,-1,Resta stock
 
 ## 15. Historial de cambios verificados
 
+### v1.6 — 2026-06-11 (estandarización para cualquier cliente)
+
+**App estándar (web + nube), no atada a un cliente:**
+
+- **Maestro y movimientos opcionales.** El análisis solo necesita el **stock** sí o sí. Si falta el maestro (clientes sin catálogo) o los movimientos (clientes que solo comparan dos fotos de stock), la app usa tablas vacías y sigue funcionando, sin crashear.
+- **Diccionario de columnas ampliado.** El auto-mapeo reconoce muchos más nombres comunes de ERPs (en español e inglés): EAN/código de barras, Material, Referencia, Existencias, Stock Actual/Real/Disponible, Unidad de Gestión, Línea, Grupo, Tipo de Documento, etc.
+- **Campos CLC por tipo de hoja** (desplegable acotado): maestro = `CodigoArticulo` + `Descripcion` + `Categoria` (opc.); stock = `CodigoArticulo` + `Fecha` + `StockInformado`; movimientos = `CodigoArticulo` + `Fecha` + `CantidadOriginal` + `TipoMovimiento` (opc.).
+- **Signos de movimientos a elección:** por hoja a mano (entrada/salida/mantener) o por tipo con IA (clasifica ingreso/egreso/mantener y vos confirmás). Los **ajustes** usan "mantener" (respetan el signo +/− de cada fila). El sistema **nunca cambia un signo** salvo que vos lo pidas.
+- **Códigos tal cual:** no se quitan ceros a la izquierda (`0658…` ≠ `658…`).
+- **Almacenamiento en la nube por cliente** (Supabase): cada análisis se guarda con su historial; se abren corridas anteriores desde el panel izquierdo. Opcional (sin Supabase, funciona local).
+- **Página "Visualización de datos" → "Balance de Masa":** KPIs de stock (inicial/movimientos/final/calculado/diferencia/%), desglose de movimientos por tipo, stock acumulado por mes y tabla por Unidad de Gestión (categoría).
+
+**Verificado:** el caso Palacio sigue cerrando al 100% (5350 OK / 0 diferencias) tras todos estos cambios.
+
+**Configuración (`.env` o secrets de Streamlit):** ver `.env.example`. `ANTHROPIC_API_KEY` (chat IA + signos), `SUPABASE_URL` y `SUPABASE_KEY` (nube, opcional).
+
+---
+
 ### v1.5 — 2026-06-05
 
 **IA con acceso real a la data (tool use):**

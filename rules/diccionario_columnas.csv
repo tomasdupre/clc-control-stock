@@ -65,3 +65,50 @@ Estado,Estado,Estado del producto
 Estado,Activo,Estado del producto
 Estado,Situacion,Estado del producto
 Estado,Situación,Estado del producto
+CodigoArticulo,Articulo,Codigo del articulo o producto
+CodigoArticulo,Artículo,Codigo del articulo o producto
+CodigoArticulo,Material,Codigo del articulo o producto
+CodigoArticulo,Referencia,Codigo del articulo o producto
+CodigoArticulo,Ref,Codigo del articulo o producto
+CodigoArticulo,EAN,Codigo de barras del articulo
+CodigoArticulo,Codigo de Barras,Codigo de barras del articulo
+CodigoArticulo,Código de Barras,Codigo de barras del articulo
+CodigoArticulo,Barcode,Codigo de barras del articulo
+CodigoArticulo,Code,Codigo del articulo o producto
+CodigoArticulo,Product Code,Codigo del articulo o producto
+CodigoArticulo,ID Producto,Codigo del articulo o producto
+Descripcion,Description,Descripcion del articulo
+Descripcion,Nombre,Nombre del articulo
+Descripcion,Nombre del Articulo,Nombre del articulo
+Descripcion,Nombre Articulo,Nombre del articulo
+Descripcion,Descripcion Articulo,Descripcion del articulo
+Fecha,Date,Fecha del registro
+Fecha,Fecha Documento,Fecha del documento
+Fecha,Fecha Comprobante,Fecha del comprobante
+Fecha,Fecha de Stock,Fecha de la foto de stock
+Fecha,Periodo,Periodo del registro
+Fecha,Fecha Movimiento,Fecha del movimiento
+StockInformado,Stock Actual,Stock informado por cliente
+StockInformado,Stock Real,Stock informado por cliente
+StockInformado,Stock Disponible,Stock informado por cliente
+StockInformado,Stock Sistema,Stock informado por cliente
+StockInformado,Existencias,Stock informado por cliente
+StockInformado,Disponible,Stock informado por cliente
+StockInformado,Cantidad en Stock,Stock informado por cliente
+StockInformado,Cant. Stock,Stock informado por cliente
+StockInformado,On Hand,Stock informado por cliente
+CantidadOriginal,Cantidad Movimiento,Cantidad del movimiento
+CantidadOriginal,Cant. Movida,Cantidad del movimiento
+CantidadOriginal,Quantity,Cantidad del movimiento
+Categoria,Unidad de Gestion,Categoria o unidad de gestion del producto
+Categoria,Unidad de Gestión,Categoria o unidad de gestion del producto
+Categoria,Linea,Categoria del producto
+Categoria,Línea,Categoria del producto
+Categoria,Grupo,Categoria del producto
+Categoria,Sector,Categoria del producto
+Categoria,Subcategoria,Categoria del producto
+TipoMovimiento,Tipo de Movimiento,Tipo de movimiento original
+TipoMovimiento,Tipo Mov,Tipo de movimiento original
+TipoMovimiento,Tipo de Documento,Tipo de documento del movimiento
+TipoMovimiento,Motivo,Motivo del movimiento
+TipoMovimiento,Clase Movimiento,Tipo de movimiento original
