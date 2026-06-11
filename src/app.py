@@ -1430,6 +1430,7 @@ if page == "⚙️ Procesar":
                                 control_df=result["control_df"],
                                 xlsx_path=str(result["output_path"]),
                                 diagnostico_path=str(diag_path),
+                                movimientos_df=result.get("movimientos_finales"),
                                 movimientos_path=str(NORMALIZED_DIR / "movimientos_normalizado.parquet"),
                             )
                             st.write("✅ Corrida guardada en la nube.")

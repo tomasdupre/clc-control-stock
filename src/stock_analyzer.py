@@ -918,6 +918,10 @@ def run_stock_analysis(
         "output_path": output_path,
         "errors_df": errors_df,
         "warnings_df": warnings_df,
+        # Movimientos EXACTAMENTE como los usó el control (con los signos ya aplicados:
+        # por hoja y por tipo/IA). Es lo que deben guardar las visualizaciones para que
+        # el desglose reconcilie con el control.
+        "movimientos_finales": movements_for_audit_df,
     }
 
 

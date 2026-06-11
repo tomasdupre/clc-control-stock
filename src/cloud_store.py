@@ -102,7 +102,8 @@ def _upload_bytes(path, data, content_type):
 
 
 def save_corrida(nombre_cliente, parametros, resumen, control_df,
-                 xlsx_path=None, diagnostico_path=None, nota="", movimientos_path=None):
+                 xlsx_path=None, diagnostico_path=None, nota="",
+                 movimientos_path=None, movimientos_df=None):
     """
     Guarda una corrida completa en la nube:
       - sube el control (parquet), el xlsx, el diagnóstico y los movimientos al Storage,
@@ -120,8 +121,14 @@ def save_corrida(nombre_cliente, parametros, resumen, control_df,
         f"{prefijo}/control.parquet", buf.getvalue(), "application/octet-stream"
     )
 
-    # Movimientos normalizados (para visualizaciones como Balance de Masa).
-    if movimientos_path and os.path.exists(movimientos_path):
+    # Movimientos para visualizaciones (Balance de Masa). Se prioriza el DataFrame
+    # con los movimientos TAL CUAL los usó el control (signos ya aplicados); si no,
+    # el archivo normalizado en disco.
+    if movimientos_df is not None and not movimientos_df.empty:
+        mbuf = io.BytesIO()
+        movimientos_df.to_parquet(mbuf, index=False)
+        _upload_bytes(f"{prefijo}/movimientos.parquet", mbuf.getvalue(), "application/octet-stream")
+    elif movimientos_path and os.path.exists(movimientos_path):
         with open(movimientos_path, "rb") as fh:
             _upload_bytes(f"{prefijo}/movimientos.parquet", fh.read(), "application/octet-stream")
 
