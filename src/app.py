@@ -1785,7 +1785,12 @@ elif page == "📈 Visualización de datos":
             mov["Cantidad"] = pd.to_numeric(mov.get("CantidadNormalizada"), errors="coerce").fillna(0)
             tipo = mov.get("TipoMovimiento", pd.Series("", index=mov.index)).fillna("").astype(str).str.strip()
             hoja = mov.get("HojaOrigen", pd.Series("", index=mov.index)).fillna("").astype(str).str.strip()
-            mov["Tipo"] = tipo.where(tipo != "", hoja).replace("", "Sin tipo")
+            # Tipo = TipoMovimiento (si está); si no, el nombre de la hoja de origen.
+            # Los nombres de hoja genéricos (Sheet, Hoja1, etc.) no son un tipo real:
+            # se muestran como "Sin tipo" para no ensuciar el desglose.
+            GENERICOS = {"sheet", "sheet1", "sheet 1", "hoja", "hoja1", "hoja 1", "hoja1 ", "", "nan"}
+            hoja_limpia = hoja.apply(lambda h: "Sin tipo" if str(h).strip().lower() in GENERICOS else h)
+            mov["Tipo"] = tipo.where(tipo != "", hoja_limpia).replace("", "Sin tipo")
             mov["Fecha_dt"] = pd.to_datetime(mov.get("Fecha"), errors="coerce")
 
             tipos_disp = sorted(mov["Tipo"].unique().tolist())
