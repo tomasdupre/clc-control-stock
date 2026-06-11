@@ -1068,17 +1068,21 @@ if page == "⚙️ Procesar":
 
                     mapping_df = st.session_state.proc_mappings[key]
 
-                    # Valores de ejemplo por columna, para ver de un vistazo
-                    # cuál tiene códigos y cuál descripciones (evita confundir
-                    # un campo con otro al mapear).
+                    # Valores de ejemplo y cantidad de valores únicos por columna, para ver
+                    # de un vistazo cuál tiene códigos y cuál descripciones (evita confundir
+                    # un campo con otro al mapear). Ej: un código tiene muchos únicos; un
+                    # tipo de movimiento o categoría, pocos.
                     ejemplos = {}
+                    unicos = {}
                     for col in df.columns:
                         muestra = df[col].dropna().astype(str).str.strip()
                         muestra = muestra[muestra != ""].head(2).tolist()
                         ejemplos[str(col)] = " · ".join(s[:30] for s in muestra)
+                        unicos[str(col)] = int(df[col].nunique(dropna=True))
 
                     display_df = mapping_df[["ColumnaOriginal", "CampoCLC", "Confianza", "Observacion"]].copy()
                     display_df.insert(1, "Ejemplo", display_df["ColumnaOriginal"].astype(str).map(ejemplos).fillna(""))
+                    display_df.insert(2, "ValoresUnicos", display_df["ColumnaOriginal"].astype(str).map(unicos).fillna(0).astype(int))
 
                     edited = st.data_editor(
                         display_df,
@@ -1088,6 +1092,7 @@ if page == "⚙️ Procesar":
                                 options=opciones_clc,
                             ),
                             "Ejemplo": st.column_config.TextColumn("Valores de ejemplo", disabled=True),
+                            "ValoresUnicos": st.column_config.NumberColumn("Valores únicos", disabled=True, format="%d"),
                             "Confianza": st.column_config.NumberColumn("Confianza", disabled=True),
                             "Observacion": st.column_config.TextColumn("Observación", disabled=True),
                             "ColumnaOriginal": st.column_config.TextColumn("Columna original", disabled=True),
