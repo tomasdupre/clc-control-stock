@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from column_mapper import PENDING_FIELD, mapping_dataframe_to_dict, normalize_text, propose_column_mapping
 from normalizer import export_normalized, normalize_code, normalize_master, normalize_movements, normalize_stock
-from stock_analyzer import run_stock_analysis
+from stock_analyzer import build_calculation_consistency, run_stock_analysis
 from diagnosis_generator import generate_diagnosis
 import cloud_store
 
@@ -52,7 +52,7 @@ CLC_FIELDS_BY_TYPE = {
     "maestro": ["CodigoArticulo", "Descripcion", "Categoria"],
     "stock": ["CodigoArticulo", "Fecha", "StockInformado"],
     # TipoMovimiento es OPCIONAL: solo hace falta si vas a asignar signos por tipo (con IA).
-    "movimientos": ["CodigoArticulo", "Fecha", "CantidadOriginal", "TipoMovimiento"],
+    "movimientos": ["CodigoArticulo", "Descripcion", "Fecha", "CantidadOriginal", "TipoMovimiento"],
 }
 
 
@@ -86,21 +86,24 @@ def aplicar_signo_hoja(norm_df, signo):
 
 
 # Todos los campos válidos (unión), por compatibilidad.
-VALID_CLC_FIELDS = ["CodigoArticulo", "Descripcion", "Fecha", "StockInformado", "CantidadOriginal", PENDING_FIELD]
+VALID_CLC_FIELDS = [
+    "CodigoArticulo", "Descripcion", "Fecha", "StockInformado",
+    "CantidadOriginal", "TipoMovimiento", "Categoria", PENDING_FIELD,
+]
 
 # Campos que el calculo necesita si o si por cada tipo de archivo.
 # Si alguno queda sin asignar, el normalizado sale incompleto: hay que bloquear.
 REQUIRED_BY_TYPE = {
     "maestro": ["CodigoArticulo"],
     "stock": ["CodigoArticulo", "Fecha", "StockInformado"],
-    "movimientos": ["CodigoArticulo", "Fecha", "CantidadOriginal"],
+    "movimientos": ["CodigoArticulo", "CantidadOriginal"],
 }
 
 # Campos que conviene tener pero no bloquean (solo advertencia).
 RECOMMENDED_BY_TYPE = {
     "maestro": ["Descripcion", "Categoria"],
     "stock": [],
-    "movimientos": [],
+    "movimientos": ["Descripcion", "Fecha"],
 }
 
 STOCK_LIKE_QUANTITY_COLUMNS = {
@@ -191,6 +194,29 @@ def find_available_reports():
     )
 
 
+def movements_path_for_report(report_path):
+    """Parquet local con los movimientos usados por un reporte especifico."""
+    path = Path(report_path)
+    return path.with_name(f"{path.stem}_movimientos_calculo.parquet")
+
+
+def metadata_path_for_report(report_path):
+    """JSON local con parametros y totales de una corrida."""
+    path = Path(report_path)
+    return path.with_name(f"{path.stem}_metadata.json")
+
+
+@st.cache_data(show_spinner=False)
+def load_local_run_metadata(report_path_str):
+    path = metadata_path_for_report(report_path_str)
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
 @st.cache_data(show_spinner="Cargando corrida de la nube...")
 def load_cloud_control(archivo_control):
     """Descarga el control de una corrida guardada en la nube (parquet)."""
@@ -198,13 +224,13 @@ def load_cloud_control(archivo_control):
 
 
 @st.cache_data(show_spinner="Cargando movimientos...")
-def load_viz_movimientos(cloud_archivo_control_param):
+def load_active_movements(cloud_archivo_control_param, report_path_str):
     """
     Movimientos para las visualizaciones.
 
     - En modo NUBE: SOLO los movimientos de ESA corrida (nunca los locales, que
       pertenecen a otro cliente y mezclarían los datos).
-    - En modo LOCAL: del normalizado local (que corresponde al reporte local activo).
+    - En modo LOCAL: del parquet de movimientos guardado junto al reporte activo.
 
     Nunca lanza error: ante cualquier problema devuelve vacío (la página muestra solo KPIs).
     """
@@ -216,13 +242,19 @@ def load_viz_movimientos(cloud_archivo_control_param):
                 if df is not None and not df.empty:
                     return df
             return pd.DataFrame()
-        # Modo local
-        p = NORMALIZED_DIR / "movimientos_normalizado.parquet"
-        if p.exists():
-            return pd.read_parquet(p)
+        if report_path_str:
+            p = movements_path_for_report(report_path_str)
+            if p.exists():
+                return pd.read_parquet(p)
     except Exception:
         pass
     return pd.DataFrame()
+
+
+@st.cache_data(show_spinner="Cargando movimientos...")
+def load_viz_movimientos(cloud_archivo_control_param, report_path_str):
+    """Alias semantico para visualizaciones: usa los movimientos activos."""
+    return load_active_movements(cloud_archivo_control_param, report_path_str)
 
 
 @st.cache_data(show_spinner="Cargando reporte...")
@@ -233,7 +265,7 @@ def load_report(path_str):
     # de filas y haría lento cada cambio de pantalla. Se carga bajo demanda.
     sheets = [
         "control_stock", "resumen", "solo_diferencias",
-        "duplicados_movimientos", "advertencias",
+        "duplicados_movimientos", "consistencia_calculo", "advertencias",
     ]
     data = {}
     for sheet in sheets:
@@ -275,6 +307,7 @@ def build_claude_context(data, report_name):
     diffs = data["solo_diferencias"]
     advertencias = data["advertencias"]
     duplicados = data["duplicados_movimientos"]
+    consistencia = data.get("consistencia_calculo", pd.DataFrame())
 
     total = int(resumen.get("total_registros_controlados", 0))
     ok = int(resumen.get("total_registros_ok", 0))
@@ -310,7 +343,19 @@ def build_claude_context(data, report_name):
         deposito_str = dep.to_string()
 
     adv_str = advertencias.to_string(index=False) if not advertencias.empty else "Sin advertencias."
-    dup_str = f"{len(duplicados)} movimientos duplicados eliminados antes del cálculo." if not duplicados.empty else "Sin duplicados."
+    dup_str = (
+        f"{len(duplicados)} posibles movimientos duplicados detectados; no se eliminaron del calculo."
+        if not duplicados.empty else "Sin duplicados."
+    )
+    if not consistencia.empty and "EstadoConsistencia" in consistencia.columns:
+        revisar_cons = int((consistencia["EstadoConsistencia"] == "Revisar").sum())
+        consistencia_str = (
+            "Consistencia interna OK."
+            if revisar_cons == 0
+            else f"Consistencia interna a revisar: {revisar_cons} filas no cierran contra los movimientos guardados."
+        )
+    else:
+        consistencia_str = "Sin auditoria interna de consistencia disponible para esta corrida."
 
     return f"""Sos un asistente experto en control de stock logístico para CLC Consultora Logística.
 Respondé siempre en español rioplatense, de forma clara, concreta y profesional.
@@ -345,6 +390,9 @@ ADVERTENCIAS DEL SISTEMA:
 
 DUPLICADOS:
 {dup_str}
+
+CONSISTENCIA INTERNA:
+{consistencia_str}
 """
 
 
@@ -477,10 +525,21 @@ def _load_movimientos_norm(path_str):
     return pd.DataFrame()
 
 
-def tool_buscar_movimientos(codigo):
-    mov = _load_movimientos_norm(str(NORMALIZED_DIR / "movimientos_normalizado.parquet"))
+def load_movimientos_for_sign_config():
+    """
+    Durante el paso de procesamiento todavia no hay corrida activa.
+    Para configurar signos por tipo se usa el normalizado recien generado.
+    """
+    return _load_movimientos_norm(str(NORMALIZED_DIR / "movimientos_normalizado.parquet"))
+
+
+def tool_buscar_movimientos(codigo, movements_df=None):
+    mov = movements_df.copy() if movements_df is not None else pd.DataFrame()
     if mov.empty:
-        return {"disponible": False, "mensaje": "No hay movimientos normalizados cargados en data/normalized."}
+        return {
+            "disponible": False,
+            "mensaje": "No hay movimientos de calculo guardados para la corrida activa. Reejecuta el analisis.",
+        }
     raw = str(codigo).strip()
     norm = normalize_code(raw)
     codes = mov["CodigoArticulo"].astype(str)
@@ -491,7 +550,11 @@ def tool_buscar_movimientos(codigo):
         return {"encontrado": False, "mensaje": f"No hay movimientos para '{codigo}'."}
 
     qty = pd.to_numeric(sub.get("CantidadNormalizada"), errors="coerce").fillna(0)
-    cols = ["Fecha", "CodigoArticulo", "Deposito", "TipoMovimiento", "CantidadNormalizada", "Documento"]
+    cols = [
+        "Fecha", "CodigoArticulo", "Descripcion", "Deposito",
+        "TipoMovimiento", "CantidadNormalizada", "Documento",
+        "ArchivoOrigen", "HojaOrigen",
+    ]
     return {
         "encontrado": True,
         "cantidad_movimientos": int(len(sub)),
@@ -503,7 +566,7 @@ def tool_buscar_movimientos(codigo):
     }
 
 
-def build_movement_trace(control_df, codigo, selected_index=None):
+def build_movement_trace(control_df, codigo, movements_df=None, selected_index=None):
     """Reconstruye, fila por fila, como se forma MovimientosAcumulados."""
     if control_df is None or control_df.empty:
         return None, pd.DataFrame(), pd.DataFrame(), "No hay reporte de control cargado."
@@ -535,9 +598,12 @@ def build_movement_trace(control_df, codigo, selected_index=None):
         selected_index = non_base.index[-1] if not non_base.empty else control_rows.index[-1]
     control_row = control_rows.loc[selected_index]
 
-    movements = _load_movimientos_norm(str(NORMALIZED_DIR / "movimientos_normalizado.parquet"))
+    movements = movements_df.copy() if movements_df is not None else pd.DataFrame()
     if movements.empty:
-        return control_row, pd.DataFrame(), pd.DataFrame(), "No hay movimientos normalizados disponibles."
+        return control_row, pd.DataFrame(), pd.DataFrame(), (
+            "No hay movimientos de calculo guardados para esta corrida. "
+            "Reejecuta el analisis para habilitar la traza exacta."
+        )
     if "CodigoArticulo" not in movements.columns:
         return control_row, pd.DataFrame(), pd.DataFrame(), "El normalizado de movimientos no tiene CodigoArticulo."
 
@@ -556,12 +622,12 @@ def build_movement_trace(control_df, codigo, selected_index=None):
     if "Fecha" not in mov.columns:
         mov["Fecha"] = ""
     mov["Fecha_dt"] = pd.to_datetime(mov["Fecha"], errors="coerce")
-    cantidad_previa = pd.to_numeric(mov.get("CantidadNormalizada"), errors="coerce")
+    cantidad_final = pd.to_numeric(mov.get("CantidadNormalizada"), errors="coerce")
     if "CantidadOriginal" in mov.columns:
         cantidad_original = pd.to_numeric(mov["CantidadOriginal"], errors="coerce")
-        mov["CantidadNormalizada"] = cantidad_original.where(cantidad_original.notna(), cantidad_previa)
+        mov["CantidadNormalizada"] = cantidad_final.where(cantidad_final.notna(), cantidad_original)
     else:
-        mov["CantidadNormalizada"] = cantidad_previa
+        mov["CantidadNormalizada"] = cantidad_final
     fecha_inicial = pd.to_datetime(control_row.get("FechaInicial"), errors="coerce")
     fecha_control = pd.to_datetime(control_row.get("Fecha"), errors="coerce")
 
@@ -615,12 +681,12 @@ def build_movement_trace(control_df, codigo, selected_index=None):
     return control_row, incluidos, excluidos, ""
 
 
-def run_chat_tool(name, tool_input, control_df):
+def run_chat_tool(name, tool_input, control_df, movements_df=None):
     try:
         if name == "buscar_producto":
             return tool_buscar_producto(control_df, tool_input.get("codigo", ""))
         if name == "buscar_movimientos":
-            return tool_buscar_movimientos(tool_input.get("codigo", ""))
+            return tool_buscar_movimientos(tool_input.get("codigo", ""), movements_df)
         return {"error": f"Herramienta desconocida: {name}"}
     except Exception as exc:
         return {"error": f"Fallo al ejecutar {name}: {exc}"}
@@ -670,10 +736,14 @@ with st.sidebar:
     st.markdown("## 📦 CLC Control de Stock")
     st.divider()
 
+    if "pending_nav_page" in st.session_state:
+        st.session_state.nav_page = st.session_state.pop("pending_nav_page")
+
     page = st.radio(
         "Navegación",
         ["⚙️ Procesar", "📊 Resumen", "🔍 Detalle", "📈 Visualización de datos", "💬 Consultar con IA"],
         label_visibility="collapsed",
+        key="nav_page",
     )
 
     if page == "⚙️ Procesar":
@@ -691,6 +761,8 @@ with st.sidebar:
     report_path = None          # ruta local (si se usa fuente local)
     cloud_control_full = None    # control cargado desde la nube (si se usa fuente nube)
     cloud_archivo_control = None  # ruta del control en la nube (para cargar sus movimientos)
+    cloud_include_initial = False
+    local_run_metadata = {}
     report_label = None
     cloud_on = cloud_store.is_configured()
 
@@ -727,6 +799,9 @@ with st.sidebar:
                 opts = {_corrida_label(c): c for c in corridas}
                 corr_sel = st.selectbox("Corrida", list(opts.keys()))
                 corrida = opts[corr_sel]
+                cloud_include_initial = bool(
+                    (corrida.get("parametros") or {}).get("include_initial_date_movements", False)
+                )
                 try:
                     cloud_control_full = load_cloud_control(corrida["archivo_control"])
                     cloud_archivo_control = corrida["archivo_control"]
@@ -744,6 +819,7 @@ with st.sidebar:
             report_names = [r.name for r in reports]
             selected_name = st.selectbox("Reporte activo", report_names)
             report_path = REPORTS_DIR / selected_name
+            local_run_metadata = load_local_run_metadata(str(report_path))
             mtime = pd.Timestamp(report_path.stat().st_mtime, unit="s").strftime("%d/%m/%Y %H:%M")
             st.caption(f"Generado: {mtime}")
             report_label = selected_name
@@ -806,6 +882,10 @@ def marcar_lineas_base(control_df):
 
 # En "Procesar" no se necesita el reporte: evitamos leer Excel grande en cada rerun.
 if hay_reporte and page != "⚙️ Procesar":
+    active_movements = load_active_movements(
+        cloud_archivo_control,
+        str(report_path) if report_path is not None else "",
+    )
     if cloud_control_full is not None:
         # Reporte cargado desde la nube (parquet con la tabla de control completa).
         # Reconstruimos las hojas que usan el chat y el detalle a partir del control.
@@ -823,10 +903,22 @@ if hay_reporte and page != "⚙️ Procesar":
             "resumen": resumen_cloud,
             "advertencias": pd.DataFrame(),
             "duplicados_movimientos": pd.DataFrame(),
+            "consistencia_calculo": build_calculation_consistency(
+                control_full,
+                active_movements,
+                include_initial_date_movements=cloud_include_initial,
+            ),
         }
     else:
         data = load_report(str(report_path))
         control_full = data["control_stock"]
+        if data.get("consistencia_calculo", pd.DataFrame()).empty and active_movements is not None and not active_movements.empty:
+            params = local_run_metadata.get("parametros") or {}
+            data["consistencia_calculo"] = build_calculation_consistency(
+                control_full,
+                active_movements,
+                include_initial_date_movements=bool(params.get("include_initial_date_movements", False)),
+            )
     es_base = marcar_lineas_base(control_full)
     lineas_base_ocultas = 0
     if mostrar_lineas_base:
@@ -847,6 +939,7 @@ else:
     data = {}
     control = pd.DataFrame()
     control_full = pd.DataFrame()
+    active_movements = pd.DataFrame()
     diffs = pd.DataFrame()
     lineas_base_ocultas = 0
 
@@ -1255,9 +1348,15 @@ if page == "⚙️ Procesar":
             st.dataframe(log_df, use_container_width=True, hide_index=True)
 
         tipos_ok = {t for t, dfs in st.session_state.proc_normalized.items() if dfs}
-        missing = {"maestro", "stock", "movimientos"} - tipos_ok
-        if missing:
-            st.warning(f"Faltan archivos normalizados: {', '.join(missing)}. El análisis podría fallar.")
+        if "stock" not in tipos_ok:
+            st.error("Falta el archivo de stock. Sin stock no se puede ejecutar el control.")
+        opcionales_faltantes = {"maestro", "movimientos"} - tipos_ok
+        if opcionales_faltantes:
+            st.info(
+                "No se normalizo "
+                + ", ".join(sorted(opcionales_faltantes))
+                + ". Es opcional: el analisis sigue usando tablas vacias para lo que falte."
+            )
 
         st.divider()
         st.subheader("Configurar análisis de stock")
@@ -1302,14 +1401,12 @@ if page == "⚙️ Procesar":
                  "por cada tipo y vos lo confirmás. Requiere haber mapeado 'TipoMovimiento'.",
         )
         if usar_signos_ia:
-            mov_path = NORMALIZED_DIR / "movimientos_normalizado.parquet"
             tipos = []
-            if mov_path.exists():
-                mv = pd.read_parquet(mov_path)
-                if "TipoMovimiento" in mv.columns:
-                    tipos = sorted(
-                        t for t in mv["TipoMovimiento"].fillna("").astype(str).str.strip().unique() if t
-                    )
+            mv = load_movimientos_for_sign_config()
+            if not mv.empty and "TipoMovimiento" in mv.columns:
+                tipos = sorted(
+                    t for t in mv["TipoMovimiento"].fillna("").astype(str).str.strip().unique() if t
+                )
             if not tipos:
                 st.warning(
                     "No hay tipos de movimiento. Volvé al mapeo y asigná la columna de tipo "
@@ -1386,7 +1483,8 @@ if page == "⚙️ Procesar":
             st.session_state.proc_step = "mapping"
             st.rerun()
 
-        if col_run.button("▶ Ejecutar análisis", type="primary"):
+        stock_ready = "stock" in tipos_ok
+        if col_run.button("▶ Ejecutar análisis", type="primary", disabled=not stock_ready):
             client_slug = slugify(cliente)
             control_name = f"control_stock_resultado_{client_slug}.xlsx" if client_slug else "control_stock_resultado.xlsx"
             diag_name = f"diagnostico_stock_{client_slug}.txt" if client_slug else "diagnostico_stock.txt"
@@ -1470,6 +1568,7 @@ if page == "⚙️ Procesar":
         col1, col2 = st.columns(2)
         if col1.button("📊 Ver resultados completos", type="primary"):
             st.session_state.proc_step = "upload"
+            st.session_state.pending_nav_page = "📊 Resumen"
             st.rerun()
         if col2.button("🔄 Procesar otro cliente"):
             reset_proc_state()
@@ -1496,6 +1595,39 @@ if page == "⚙️ Procesar":
 if page == "📊 Resumen":
     st.title("📊 Resumen del Control de Stock")
     st.caption(f"Reporte: **{report_label or '—'}**")
+    with st.expander("Estado de la corrida", expanded=False):
+        local_mov_path = movements_path_for_report(report_path) if report_path is not None else None
+        if report_path is not None and local_mov_path is not None and local_mov_path.exists():
+            st.success("Foto de movimientos de la corrida: disponible")
+        elif cloud_archivo_control and active_movements is not None and not active_movements.empty:
+            st.success("Foto de movimientos de la corrida: disponible en nube")
+        elif active_movements is not None and active_movements.empty:
+            mov_control = pd.to_numeric(control_full.get("MovimientosAcumulados"), errors="coerce").fillna(0)
+            if mov_control.abs().sum() == 0:
+                st.info("No hay movimientos guardados y el control no tiene movimientos acumulados.")
+            else:
+                st.warning("Falta la foto de movimientos de esta corrida. Reejecuta el analisis para habilitar traza completa.")
+
+        filas_mov = len(active_movements) if active_movements is not None else 0
+        suma_mov = (
+            pd.to_numeric(active_movements.get("CantidadNormalizada"), errors="coerce").fillna(0).sum()
+            if active_movements is not None and not active_movements.empty else 0
+        )
+        c_estado1, c_estado2, c_estado3 = st.columns(3)
+        c_estado1.metric("Filas movimientos", f"{filas_mov:,}")
+        c_estado2.metric("Suma neta movimientos", f"{suma_mov:,.0f}")
+        c_estado3.metric("Filas control", f"{len(control_full):,}")
+
+        meta = local_run_metadata if report_path is not None else {}
+        params = meta.get("parametros", {}) if isinstance(meta, dict) else {}
+        if params:
+            st.caption(
+                "Parametros: "
+                f"deposito={'si' if params.get('use_deposit') else 'no'} · "
+                f"mov. fecha inicial={'si' if params.get('include_initial_date_movements') else 'no'} · "
+                f"stock final faltante=0 {'si' if params.get('assume_missing_final_zero') else 'no'}"
+            )
+
     if lineas_base_ocultas:
         st.caption(
             f"Mostrando un control por producto. {lineas_base_ocultas:,} líneas de stock inicial "
@@ -1505,6 +1637,17 @@ if page == "📊 Resumen":
 
     # Diferencia porcentual: cuánto se desvía el stock calculado del informado,
     # como % del stock informado final (sum |diferencia| / sum stock informado).
+    consistencia = data.get("consistencia_calculo", pd.DataFrame())
+    if consistencia is not None and not consistencia.empty and "EstadoConsistencia" in consistencia.columns:
+        revisar_consistencia = consistencia[consistencia["EstadoConsistencia"] == "Revisar"]
+        if revisar_consistencia.empty:
+            st.success("Consistencia interna OK: el control cierra contra los movimientos guardados de esta corrida.")
+        else:
+            st.error(
+                f"Consistencia interna a revisar: {len(revisar_consistencia):,} filas no cierran "
+                "contra los movimientos guardados de esta corrida."
+            )
+
     total_informado = pd.to_numeric(control.get("StockInformado"), errors="coerce").fillna(0).sum() if not control.empty else 0
     dif_pct = (abs_diff / total_informado * 100) if total_informado else 0.0
 
@@ -1667,6 +1810,7 @@ elif page == "🔍 Detalle":
         control_row, traza_df, excluidos_df, trace_message = build_movement_trace(
             control_full,
             codigo_traza,
+            active_movements,
         )
         if trace_message:
             st.warning(trace_message)
@@ -1740,12 +1884,12 @@ elif page == "🔍 Detalle":
                     st.caption(f"{len(no_ap):,} movimientos no aplicados (se muestran los primeros 1.000)")
                     st.dataframe(no_ap.head(1000), use_container_width=True, hide_index=True)
 
-    with st.expander("Ver movimientos duplicados eliminados"):
+    with st.expander("Ver posibles movimientos duplicados"):
         dups = data["duplicados_movimientos"]
         if dups.empty:
-            st.info("No se eliminaron duplicados.")
+            st.info("No se detectaron posibles duplicados.")
         else:
-            st.caption(f"{len(dups):,} filas eliminadas antes del cálculo")
+            st.caption(f"{len(dups):,} filas sospechosas detectadas. No se eliminaron del calculo.")
             st.dataframe(dups, use_container_width=True, hide_index=True)
 
 
@@ -1765,26 +1909,34 @@ elif page == "📈 Visualización de datos":
             st.warning("No hay datos de control para mostrar.")
             st.stop()
 
-        # ── Totales de stock (desde el control) ───────────────────────────────
+        # ── Totales de stock (las FOTOS de fin de mes son la fuente de verdad) ─
+        # El stock se mide como foto a fin de período: el primer corte es el Stock
+        # Inicial real y el último corte el Stock Final real. NO usamos la columna
+        # StockInicial del control para el agregado: esa columna es per-producto y
+        # descarta los productos que existían al inicio pero ya no están al final,
+        # lo que distorsiona el balance de masa. El balance correcto es:
+        #     Foto inicial  +  (todos los movimientos del período)  =  Foto final
         cf = control_full.copy()
         cf["Fecha_dt"] = pd.to_datetime(cf["Fecha"], errors="coerce")
+        cf["_StockInf_num"] = pd.to_numeric(cf.get("StockInformado"), errors="coerce").fillna(0)
         fecha_inicial = cf["Fecha_dt"].min()
         fecha_final = cf["Fecha_dt"].max()
         fin = cf[cf["Fecha_dt"] == fecha_final].copy()
         for c in ["StockInicial", "MovimientosAcumulados", "StockCalculado", "StockInformado", "Diferencia"]:
             fin[c] = pd.to_numeric(fin.get(c), errors="coerce").fillna(0)
-        stock_inicial = fin["StockInicial"].sum()
-        mov_netos = fin["MovimientosAcumulados"].sum()
-        stock_final_calc = fin["StockCalculado"].sum()
-        stock_final_foto = fin["StockInformado"].sum()
-        dif_unidades = stock_final_foto - stock_final_calc
-        dif_pct = (dif_unidades / stock_final_foto * 100) if stock_final_foto else 0.0
+
+        # Foto de fin de mes: suma del Stock Informado en el primer y último corte.
+        stock_inicial = cf.loc[cf["Fecha_dt"] == fecha_inicial, "_StockInf_num"].sum()
+        stock_final_foto = cf.loc[cf["Fecha_dt"] == fecha_final, "_StockInf_num"].sum()
 
         f_ini = fecha_inicial.date().isoformat() if pd.notna(fecha_inicial) else "—"
         f_fin = fecha_final.date().isoformat() if pd.notna(fecha_final) else "—"
 
         # ── Movimientos (para el desglose por tipo y por mes) ──────────────────
-        mov = load_viz_movimientos(cloud_archivo_control)
+        mov = load_viz_movimientos(
+            cloud_archivo_control,
+            str(report_path) if report_path is not None else "",
+        )
         hay_mov = not mov.empty
         if hay_mov:
             mov = mov.copy()
@@ -1804,6 +1956,26 @@ elif page == "📈 Visualización de datos":
             mov_f = mov[mov["Tipo"].isin(sel_tipos)] if sel_tipos else mov
         else:
             mov_f = pd.DataFrame()
+
+        # Movimientos del PERÍODO: posteriores a la foto inicial y hasta la foto final.
+        # NO se filtra por producto a propósito: el balance de masa es agregado y todos
+        # los movimientos del período afectan la masa total. (Filtrar por código sería
+        # frágil porque el control y los movimientos pueden venir con el código en
+        # formatos distintos —ceros a la izquierda, floats— y no matchear.) El neto de
+        # todos los movimientos debe explicar el cambio entre fotos.
+        if hay_mov:
+            en_periodo = (mov_f["Fecha_dt"] > fecha_inicial) & (mov_f["Fecha_dt"] <= fecha_final)
+            mov_periodo = mov_f[en_periodo].copy()
+            mov_netos = mov_periodo["Cantidad"].sum()
+        else:
+            mov_periodo = pd.DataFrame(columns=["Cantidad", "Fecha_dt"])
+            mov_netos = 0.0
+
+        # El stock calculado del balance arranca en la foto inicial y le suma el neto
+        # de los movimientos; idealmente cierra en la foto final.
+        stock_final_calc = stock_inicial + mov_netos
+        dif_unidades = stock_final_foto - stock_final_calc
+        dif_pct = (dif_unidades / stock_final_foto * 100) if stock_final_foto else 0.0
 
         # ── KPIs ──────────────────────────────────────────────────────────────
         st.divider()
@@ -1847,17 +2019,13 @@ elif page == "📈 Visualización de datos":
 
             with col_der:
                 st.markdown("**Stock acumulado por mes**")
-                st.caption("Acumulado = Stock Inicial + movimientos del período acumulados. El último mes cierra en el Stock Final Calculado.")
-                mov_f2 = mov_f.dropna(subset=["Fecha_dt"]).copy()
-                # Solo el período controlado (posterior a la foto inicial, hasta la final)
-                # y productos que están en el control, para que el acumulado arranque en el
-                # Stock Inicial y cierre en el Stock Final Calculado.
-                productos_control = set(cf["CodigoArticulo"].astype(str))
-                en_periodo = (mov_f2["Fecha_dt"] > fecha_inicial) & (mov_f2["Fecha_dt"] <= fecha_final)
-                en_control = mov_f2["CodigoArticulo"].astype(str).isin(productos_control)
-                mov_f2 = mov_f2[en_periodo & en_control]
-                mov_f2["Mes"] = mov_f2["Fecha_dt"].dt.to_period("M").astype(str)
-                mensual = mov_f2.groupby("Mes")["Cantidad"].sum().reset_index()
+                st.caption("Acumulado = Stock Inicial (foto) + movimientos del período acumulados. El último mes cierra en el Stock Final Calculado.")
+                # Usa exactamente los mismos movimientos del período que el KPI de arriba
+                # (mov_periodo), así el acumulado arranca en la foto inicial y cierra en
+                # el Stock Final Calculado.
+                mov_mes = mov_periodo.dropna(subset=["Fecha_dt"]).copy()
+                mov_mes["Mes"] = mov_mes["Fecha_dt"].dt.to_period("M").astype(str)
+                mensual = mov_mes.groupby("Mes")["Cantidad"].sum().reset_index()
                 mensual["Acumulado"] = stock_inicial + mensual["Cantidad"].cumsum()
                 st.dataframe(
                     mensual.rename(columns={"Mes": "Mes-Año", "Cantidad": "Movimientos del mes"})
@@ -1939,7 +2107,7 @@ elif page == "💬 Consultar con IA":
             "¿Cuántos SKUs tienen diferencia crítica?",
             "¿Cuál es el SKU con mayor diferencia?",
             "¿Qué porcentaje del control cerró OK?",
-            "¿Hay movimientos duplicados que afectaron el resultado?",
+            "¿Hay posibles movimientos duplicados para revisar?",
             "¿Qué recomendás revisar primero?",
             "¿Las diferencias son mayormente positivas o negativas?",
         ]
@@ -1994,7 +2162,12 @@ elif page == "💬 Consultar con IA":
                                     for block in response.content:
                                         if block.type == "tool_use":
                                             herramientas_usadas.append(f"{block.name}({block.input.get('codigo','')})")
-                                            resultado = run_chat_tool(block.name, block.input, control_full)
+                                            resultado = run_chat_tool(
+                                                block.name,
+                                                block.input,
+                                                control_full,
+                                                active_movements,
+                                            )
                                             tool_results.append({
                                                 "type": "tool_result",
                                                 "tool_use_id": block.id,

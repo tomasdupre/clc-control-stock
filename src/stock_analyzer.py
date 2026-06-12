@@ -1,3 +1,5 @@
+import json
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -742,6 +744,7 @@ def export_control_report(
     applied_movements_df,
     unapplied_movements_df,
     movement_duplicates_df,
+    consistency_df,
     errors_df,
     warnings_df,
     output_path,
@@ -769,10 +772,145 @@ def export_control_report(
         applied_movements_summary_df.to_excel(writer, sheet_name="movimientos_aplicados", index=False)
         unapplied_movements_df.to_excel(writer, sheet_name="movimientos_no_aplicados", index=False)
         movement_duplicates_df.to_excel(writer, sheet_name="duplicados_movimientos", index=False)
+        if consistency_df is not None:
+            consistency_df.to_excel(writer, sheet_name="consistencia_calculo", index=False)
         errors_df.to_excel(writer, sheet_name="errores", index=False)
         warnings_df.to_excel(writer, sheet_name="advertencias", index=False)
 
     return output_path, summary_df
+
+
+def build_calculation_consistency(
+    control_df,
+    movements_df,
+    include_initial_date_movements=False,
+):
+    """
+    Verifica que la tabla de control cierre contra la foto de movimientos guardada.
+
+    Es una auditoria liviana: recalcula MovimientosAcumulados desde los movimientos
+    finales de la corrida y lo compara contra el valor exportado en control_stock.
+    Si algo no coincide, la app puede avisar sin que el usuario tenga que auditar
+    producto por producto.
+    """
+    columns = [
+        "Fecha", "CodigoArticulo", "Deposito", "MovimientosAcumulados",
+        "MovimientosRecalculados", "DiferenciaMovimientos", "EstadoConsistencia",
+    ]
+    if control_df is None or control_df.empty:
+        return pd.DataFrame(columns=columns)
+
+    required = {"Fecha", "CodigoArticulo", "Deposito", "FechaInicial", "MovimientosAcumulados"}
+    if not required.issubset(control_df.columns):
+        return pd.DataFrame([{
+            "EstadoConsistencia": "Sin datos",
+            "Mensaje": "No se pudo verificar consistencia: faltan columnas de control",
+        }])
+
+    controls = control_df.reset_index(drop=True).copy()
+    controls["__control_id"] = np.arange(len(controls))
+    control_points = controls[["__control_id", "CodigoArticulo", "Deposito", "Fecha", "FechaInicial"]].rename(
+        columns={"Fecha": "FechaControl"}
+    )
+    recalculated = calculate_movement_totals_for_controls(
+        control_points,
+        movements_df,
+        include_initial_date_movements=include_initial_date_movements,
+    )
+    work = controls.merge(recalculated, on="__control_id", how="left", suffixes=("", "_Recalculado"))
+    work["MovimientosAcumulados"] = pd.to_numeric(work["MovimientosAcumulados"], errors="coerce")
+    work["MovimientosRecalculados"] = pd.to_numeric(
+        work.get("MovimientosAcumulados_Recalculado"),
+        errors="coerce",
+    ).fillna(0)
+    work["DiferenciaMovimientos"] = work["MovimientosRecalculados"] - work["MovimientosAcumulados"].fillna(0)
+    work["EstadoConsistencia"] = np.where(
+        work["DiferenciaMovimientos"].abs() <= 0.000001,
+        "OK",
+        "Revisar",
+    )
+    return work[columns]
+
+
+def movements_audit_path_for_report(output_path):
+    """Ruta del parquet con los movimientos exactamente usados por este reporte."""
+    output_path = Path(output_path)
+    return output_path.with_name(f"{output_path.stem}_movimientos_calculo.parquet")
+
+
+def metadata_path_for_report(output_path):
+    """Ruta del JSON con parametros y totales de la corrida."""
+    output_path = Path(output_path)
+    return output_path.with_name(f"{output_path.stem}_metadata.json")
+
+
+def export_movements_audit(movements_df, output_path):
+    """
+    Guarda los movimientos tal como entraron al calculo de una corrida.
+
+    Esto evita que la app reconstruya detalles desde data/normalized, que puede
+    cambiar cuando se procesa otro cliente. El control, la traza y las
+    visualizaciones deben mirar siempre esta misma foto de movimientos.
+    """
+    path = movements_audit_path_for_report(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    safe = movements_df.copy()
+    for col in safe.columns:
+        if safe[col].dtype == object:
+            safe[col] = safe[col].fillna("").astype(str)
+    safe.to_parquet(path, index=False)
+    return path
+
+
+def _json_ready(value):
+    """Convierte valores pandas/numpy a tipos simples para metadata JSON."""
+    if pd.isna(value) if not isinstance(value, (dict, list, tuple)) else False:
+        return None
+    if isinstance(value, (np.integer,)):
+        return int(value)
+    if isinstance(value, (np.floating,)):
+        return float(value)
+    if isinstance(value, (pd.Timestamp,)):
+        return value.isoformat()
+    return value
+
+
+def export_run_metadata(
+    output_path,
+    movimientos_path,
+    control_df,
+    movements_df,
+    summary_df,
+    consistency_df,
+    params,
+):
+    """Guarda una ficha liviana de la corrida para auditar fuente y parametros."""
+    path = metadata_path_for_report(output_path)
+    consistency_issues = 0
+    if consistency_df is not None and not consistency_df.empty and "EstadoConsistencia" in consistency_df.columns:
+        consistency_issues = int((consistency_df["EstadoConsistencia"] == "Revisar").sum())
+
+    qty = pd.to_numeric(movements_df.get("CantidadNormalizada"), errors="coerce") if movements_df is not None and not movements_df.empty else pd.Series(dtype=float)
+    metadata = {
+        "version_metadata": 1,
+        "generado_en": datetime.now().isoformat(timespec="seconds"),
+        "archivo_control": str(output_path),
+        "archivo_movimientos_calculo": str(movimientos_path),
+        "filas_control": int(len(control_df)) if control_df is not None else 0,
+        "filas_movimientos_calculo": int(len(movements_df)) if movements_df is not None else 0,
+        "suma_movimientos_calculo": float(qty.fillna(0).sum()) if not qty.empty else 0.0,
+        "resumen": {
+            k: _json_ready(v)
+            for k, v in (summary_df.iloc[0].to_dict() if summary_df is not None and not summary_df.empty else {}).items()
+        },
+        "parametros": params or {},
+        "consistencia": {
+            "filas_revisar": consistency_issues,
+            "estado": "OK" if consistency_issues == 0 else "Revisar",
+        },
+    }
+    path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path, metadata
 
 
 def apply_sign_by_type(movements_df, sign_map, respect_existing_negatives=True):
@@ -870,6 +1008,11 @@ def run_stock_analysis(
         include_initial_date_movements=include_initial_date_movements,
         required_initial_date=required_initial_date,
     )
+    consistency_df = build_calculation_consistency(
+        control_df,
+        movements_for_audit_df,
+        include_initial_date_movements=include_initial_date_movements,
+    )
 
     warnings = []
     if not possible_duplicates_df.empty:
@@ -899,6 +1042,18 @@ def run_stock_analysis(
                 "Fecha": row["Fecha"],
             })
 
+    if (
+        consistency_df is not None
+        and not consistency_df.empty
+        and "EstadoConsistencia" in consistency_df.columns
+    ):
+        consistency_issues = consistency_df[consistency_df["EstadoConsistencia"] == "Revisar"]
+        if not consistency_issues.empty:
+            warnings.append({
+                "Mensaje": "La auditoria interna detecto diferencias entre MovimientosAcumulados y los movimientos guardados de la corrida",
+                "CantidadFilas": len(consistency_issues),
+            })
+
     errors_df = pd.DataFrame(errors)
     warnings_df = pd.DataFrame(warnings)
     output_path, summary_df = export_control_report(
@@ -907,17 +1062,38 @@ def run_stock_analysis(
         applied_movements_df,
         unapplied_movements_df,
         possible_duplicates_df,
+        consistency_df,
         errors_df,
         warnings_df,
         Path(reports_dir) / output_file_name,
+    )
+    movimientos_path = export_movements_audit(movements_for_audit_df, output_path)
+    metadata_path, run_metadata = export_run_metadata(
+        output_path,
+        movimientos_path,
+        control_df,
+        movements_for_audit_df,
+        summary_df,
+        consistency_df,
+        {
+            "use_deposit": use_deposit,
+            "include_initial_date_movements": include_initial_date_movements,
+            "assume_missing_final_zero": assume_missing_final_zero,
+            "sign_map_applied": bool(sign_map),
+            "respect_existing_negatives": respect_existing_negatives,
+        },
     )
 
     return {
         "control_df": control_df,
         "summary_df": summary_df,
         "output_path": output_path,
+        "movimientos_path": movimientos_path,
+        "metadata_path": metadata_path,
+        "run_metadata": run_metadata,
         "errors_df": errors_df,
         "warnings_df": warnings_df,
+        "consistency_df": consistency_df,
         # Movimientos EXACTAMENTE como los usó el control (con los signos ya aplicados:
         # por hoja y por tipo/IA). Es lo que deben guardar las visualizaciones para que
         # el desglose reconcilie con el control.

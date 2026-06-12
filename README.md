@@ -260,6 +260,7 @@ El Excel `control_stock_resultado.xlsx` incluye estas hojas:
 - `movimientos_aplicados`: movimientos que entraron dentro del rango calculable.
 - `movimientos_no_aplicados`: movimientos que no entraron en ningun control, con el motivo.
 - `duplicados_movimientos`: posibles movimientos repetidos por `Documento + CodigoArticulo + Fecha + CantidadNormalizada`.
+- `consistencia_calculo`: auditoria interna que recalcula movimientos acumulados desde los movimientos guardados de la corrida y verifica que coincidan con `control_stock`.
 - `errores`: problemas de estructura, fechas o cantidades.
 - `advertencias`: situaciones que conviene revisar.
 
@@ -412,13 +413,26 @@ Venta,Salida,-1,Resta stock
 
 ## 15. Historial de cambios verificados
 
+### v1.7 — 2026-06-11 (consistencia de corrida)
+
+**Cierre de datos de punta a punta:**
+
+- Cada reporte guarda una foto propia de los movimientos usados en el calculo: `control_stock_resultado_<cliente>_movimientos_calculo.parquet`.
+- Cada reporte guarda una ficha tecnica de corrida: `control_stock_resultado_<cliente>_metadata.json`, con parametros, filas, totales y estado de consistencia.
+- Detalle, Visualizacion de datos y Consultar con IA usan esos movimientos de la corrida activa, no `data/normalized` suelto.
+- El Excel agrega la hoja `consistencia_calculo`, que recalcula `MovimientosAcumulados` desde los movimientos guardados y marca si coincide con `control_stock`.
+- Los duplicados ya no se eliminan automaticamente: se informan como posibles duplicados para revision y todos los movimientos siguen entrando al calculo.
+- En movimientos, los campos obligatorios son `CodigoArticulo` y `CantidadOriginal`; `Descripcion`, `Fecha` y `TipoMovimiento` son contexto recomendado/opcional.
+
+---
+
 ### v1.6 — 2026-06-11 (estandarización para cualquier cliente)
 
 **App estándar (web + nube), no atada a un cliente:**
 
 - **Maestro y movimientos opcionales.** El análisis solo necesita el **stock** sí o sí. Si falta el maestro (clientes sin catálogo) o los movimientos (clientes que solo comparan dos fotos de stock), la app usa tablas vacías y sigue funcionando, sin crashear.
 - **Diccionario de columnas ampliado.** El auto-mapeo reconoce muchos más nombres comunes de ERPs (en español e inglés): EAN/código de barras, Material, Referencia, Existencias, Stock Actual/Real/Disponible, Unidad de Gestión, Línea, Grupo, Tipo de Documento, etc.
-- **Campos CLC por tipo de hoja** (desplegable acotado): maestro = `CodigoArticulo` + `Descripcion` + `Categoria` (opc.); stock = `CodigoArticulo` + `Fecha` + `StockInformado`; movimientos = `CodigoArticulo` + `Fecha` + `CantidadOriginal` + `TipoMovimiento` (opc.).
+- **Campos CLC por tipo de hoja** (desplegable acotado): maestro = `CodigoArticulo` + `Descripcion` + `Categoria` (opc.); stock = `CodigoArticulo` + `Fecha` + `StockInformado`; movimientos = `CodigoArticulo` + `CantidadOriginal`, con `Descripcion`, `Fecha` y `TipoMovimiento` como contexto opcional/recomendado.
 - **Signos de movimientos a elección:** por hoja a mano (entrada/salida/mantener) o por tipo con IA (clasifica ingreso/egreso/mantener y vos confirmás). Los **ajustes** usan "mantener" (respetan el signo +/− de cada fila). El sistema **nunca cambia un signo** salvo que vos lo pidas.
 - **Códigos tal cual:** no se quitan ceros a la izquierda (`0658…` ≠ `658…`).
 - **Almacenamiento en la nube por cliente** (Supabase): cada análisis se guarda con su historial; se abren corridas anteriores desde el panel izquierdo. Opcional (sin Supabase, funciona local).
@@ -523,7 +537,9 @@ El cálculo da exactamente lo mismo que antes: el cambio es solo de formato y ve
 
 **Mejoras de precisión en el cálculo:**
 
-- **Deduplicación real antes del cálculo** (`deduplicate_movements` en `stock_analyzer.py`): los movimientos exactamente duplicados por `Documento + CodigoArticulo + Fecha + CantidadNormalizada` ahora se eliminan antes de alimentar el cálculo. Antes se detectaban pero no se removían, lo que hacía que se sumaran dos veces y produjeran coincidencias falsas (el StockCalculado "cerraba" solo porque el duplicado compensaba la diferencia). Los duplicados eliminados quedan documentados en la hoja `duplicados_movimientos` del Excel de control. Solo se deduplican filas con todos los campos completos — movimientos sin número de documento no se tocan.
+> Nota actual: esta regla fue reemplazada en versiones posteriores. Hoy los posibles duplicados se informan para revision, pero no se eliminan automaticamente.
+
+- **Prueba histórica de deduplicación antes del cálculo** (`deduplicate_movements` en `stock_analyzer.py`): en esta version se probo eliminar movimientos exactamente duplicados por `Documento + CodigoArticulo + Fecha + CantidadNormalizada`. Esa regla ya no es la vigente: actualmente los posibles duplicados quedan documentados en `duplicados_movimientos`, pero no se eliminan automaticamente.
 
 - **Vectorización de `calculate_control_table`** (`stock_analyzer.py`): el loop fila por fila fue reemplazado por un range-join vectorizado (merge por SKU/Deposito + filtro de fechas + groupby). El resultado numérico es idéntico al anterior para los mismos movimientos. La mejora es de rendimiento y mantenibilidad.
 
@@ -534,7 +550,7 @@ total_registros_controlados: 5347
 total_registros_ok:          4909
 total_registros_con_diferencia: 438
 total_diferencia_absoluta:   86298
-duplicados_eliminados:       4
+posibles_duplicados:         4
 ```
 
 Los 2 registros que pasaron de OK a diferencia son SKUs que "cerraban" por el efecto del movimiento duplicado, no por estar realmente bien.

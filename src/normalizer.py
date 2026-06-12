@@ -22,6 +22,7 @@ STOCK_COLUMNS = [
 MOVEMENT_COLUMNS = [
     "Fecha",
     "CodigoArticulo",
+    "Descripcion",
     "CantidadOriginal",
     "TipoMovimiento",
 ]
