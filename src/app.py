@@ -2180,12 +2180,12 @@ elif page == "📈 Visualización de datos":
             fig = px.bar(
                 df_dist, x=x_col, y=y_col, text="PctLabel",
                 color_discrete_sequence=[_TEAL],
+                title=f"<b>{title}</b>",
             )
             fig.update_traces(textposition="outside", marker_line_width=0)
             fig.update_layout(
-                title=dict(text=f"<b>{title}</b>", font_size=13,
-                           bgcolor="#0c4a6e", font_color="white", x=0, xref="paper"),
-                showlegend=False, margin=dict(t=50, b=10, l=10, r=10),
+                title=dict(font=dict(size=13, color="#0c4a6e"), x=0, xref="paper"),
+                showlegend=False, margin=dict(t=45, b=10, l=10, r=10),
                 plot_bgcolor="white", paper_bgcolor="white",
                 yaxis=dict(showgrid=True, gridcolor="#eeeeee", title=""),
                 xaxis=dict(title=""),
@@ -2263,12 +2263,12 @@ elif page == "📈 Visualización de datos":
                     dist_est, x="Estado", y="SKUs", text="PctLabel",
                     color="Estado",
                     color_discrete_map={"OK": "#28a745", "Diferencia": "#dc3545"},
+                    title="<b>SKUs por estado de control</b>",
                 )
                 fig_est.update_traces(textposition="outside", marker_line_width=0)
                 fig_est.update_layout(
-                    title=dict(text="<b>SKUs por estado de control</b>", font_size=13,
-                               bgcolor="#0c4a6e", font_color="white", x=0, xref="paper"),
-                    showlegend=False, margin=dict(t=50, b=10, l=10, r=10),
+                    title=dict(font=dict(size=13, color="#0c4a6e"), x=0, xref="paper"),
+                    showlegend=False, margin=dict(t=45, b=10, l=10, r=10),
                     plot_bgcolor="white", paper_bgcolor="white",
                     yaxis=dict(showgrid=True, gridcolor="#eeeeee", title=""),
                     xaxis=dict(title=""),
