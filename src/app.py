@@ -2020,9 +2020,7 @@ elif page == "📈 Visualización de datos":
             mov["Tipo"] = tipo.where(tipo != "", hoja_limpia).replace("", "Sin tipo")
             mov["Fecha_dt"] = pd.to_datetime(mov.get("Fecha"), errors="coerce")
 
-            tipos_disp = sorted(mov["Tipo"].unique().tolist())
-            sel_tipos = st.multiselect("Tipo de movimiento", tipos_disp, default=tipos_disp)
-            mov_f = mov[mov["Tipo"].isin(sel_tipos)] if sel_tipos else mov
+            mov_f = mov
         else:
             mov_f = pd.DataFrame()
 
@@ -2225,6 +2223,21 @@ elif page == "📈 Visualización de datos":
             )
             return fig
 
+        def _tipo_pills(diario_df, key):
+            """Devuelve diario filtrado según la selección de pills de tipo de movimiento."""
+            _tipos = sorted(diario_df["Tipo"].dropna().unique().tolist())
+            if not _tipos:
+                return diario_df
+            _opts = ["Total"] + _tipos
+            _sel = st.pills(
+                "Tipo de movimiento", _opts,
+                selection_mode="multi", default=["Total"],
+                key=key, label_visibility="collapsed",
+            )
+            if not _sel or "Total" in _sel:
+                return diario_df
+            return diario_df[diario_df["Tipo"].isin(_sel)]
+
         def _ts_line(df_ts, x_col, y_col, title, y_label=""):
             """Serie temporal con línea de promedio punteada, estilo teal."""
             avg = df_ts[y_col].mean() if not df_ts.empty else 0
@@ -2313,22 +2326,22 @@ elif page == "📈 Visualización de datos":
             if not mov_periodo.empty and "Fecha_dt" in mov_periodo.columns:
                 diario = mov_periodo.dropna(subset=["Fecha_dt"]).copy()
                 diario["Dia"] = diario["Fecha_dt"].dt.date
-                neto_d = diario.groupby("Dia")["Cantidad"].sum()
 
-                # 1. Evolución del stock diario (acumulado desde la foto inicial).
-                # Arranca en stock_inicial y DEBE cerrar en stock_final_calc.
-                # Rellena los días sin movimientos con 0 (stock no cambia).
+                # 1. Evolución del stock diario
                 if pd.notna(fecha_inicial) and pd.notna(fecha_final):
+                    st.markdown("**Evolución del stock diario**")
+                    _d1 = _tipo_pills(diario, "pills_stock")
+                    _neto_d1 = _d1.groupby("Dia")["Cantidad"].sum()
                     dias_rango = pd.date_range(
                         fecha_inicial + pd.Timedelta(days=1), fecha_final, freq="D"
                     )
                     stock_d = pd.Series(0.0, index=[d.date() for d in dias_rango])
-                    stock_d.update(neto_d)
+                    stock_d.update(_neto_d1)
                     stock_acum = (stock_inicial + stock_d.cumsum()).reset_index()
                     stock_acum.columns = ["Día", "Stock"]
                     fig_stock = px.line(
                         stock_acum, x="Día", y="Stock",
-                        color_discrete_sequence=[_TEAL], title="<b>Evolución del stock diario</b>",
+                        color_discrete_sequence=[_TEAL],
                     )
                     fig_stock.update_traces(line_width=1.2)
                     fig_stock.add_hline(
@@ -2337,8 +2350,7 @@ elif page == "📈 Visualización de datos":
                         annotation_position="top right", annotation_font_size=10,
                     )
                     fig_stock.update_layout(
-                        title=dict(font=dict(size=13, color="#0c4a6e"), x=0.5),
-                        showlegend=False, margin=dict(t=40, b=10, l=10, r=10),
+                        showlegend=False, margin=dict(t=10, b=10, l=10, r=10),
                         plot_bgcolor="white", paper_bgcolor="white",
                         yaxis=dict(showgrid=True, gridcolor="#eeeeee", title="Unidades"),
                         xaxis=dict(title="", showgrid=False),
@@ -2346,7 +2358,10 @@ elif page == "📈 Visualización de datos":
                     st.plotly_chart(fig_stock, use_container_width=True)
 
                 # 2. Neto diario (entradas − salidas), barras verde/rojo
-                neto_dia = neto_d.reset_index()
+                st.markdown("**Neto diario (entradas − salidas)**")
+                _d2 = _tipo_pills(diario, "pills_neto")
+                _neto_d2 = _d2.groupby("Dia")["Cantidad"].sum()
+                neto_dia = _neto_d2.reset_index()
                 neto_dia.columns = ["Día", "Neto"]
                 neto_dia["Color"] = neto_dia["Neto"].apply(
                     lambda v: "Ingreso" if v >= 0 else "Egreso"
@@ -2355,14 +2370,10 @@ elif page == "📈 Visualización de datos":
                     neto_dia, x="Día", y="Neto",
                     color="Color",
                     color_discrete_map={"Ingreso": _TEAL, "Egreso": "#dc3545"},
-                    title="<b>Neto diario (entradas − salidas)</b>",
                 )
-                fig_neto.add_hline(
-                    y=0, line_dash="dash", line_color="#888888", line_width=1,
-                )
+                fig_neto.add_hline(y=0, line_dash="dash", line_color="#888888", line_width=1)
                 fig_neto.update_layout(
-                    title=dict(font=dict(size=13, color="#0c4a6e"), x=0.5),
-                    showlegend=False, margin=dict(t=40, b=10, l=10, r=10),
+                    showlegend=False, margin=dict(t=10, b=10, l=10, r=10),
                     plot_bgcolor="white", paper_bgcolor="white",
                     yaxis=dict(showgrid=True, gridcolor="#eeeeee", title="Unidades"),
                     xaxis=dict(title="", showgrid=False),
@@ -2370,34 +2381,37 @@ elif page == "📈 Visualización de datos":
                 st.plotly_chart(fig_neto, use_container_width=True)
 
                 # 3. SKUs distintos movidos por día
-                skus_dia = diario.groupby("Dia")["CodigoArticulo"].nunique().reset_index()
+                st.markdown("**SKUs distintos movidos por día**")
+                _d3 = _tipo_pills(diario, "pills_skus")
+                skus_dia = _d3.groupby("Dia")["CodigoArticulo"].nunique().reset_index()
                 skus_dia.columns = ["Día", "SKUs"]
                 st.plotly_chart(
-                    _ts_line(skus_dia, "Día", "SKUs",
-                             "SKUs distintos movidos por día", "SKUs"),
+                    _ts_line(skus_dia, "Día", "SKUs", "", "SKUs"),
                     use_container_width=True,
                 )
 
                 # 4. Líneas por día
-                trans_dia = diario.groupby("Dia").size().reset_index()
+                st.markdown("**Líneas por día**")
+                _d4 = _tipo_pills(diario, "pills_lineas")
+                trans_dia = _d4.groupby("Dia").size().reset_index()
                 trans_dia.columns = ["Día", "Líneas"]
                 st.plotly_chart(
-                    _ts_line(trans_dia, "Día", "Líneas",
-                             "Líneas por día", "Líneas"),
+                    _ts_line(trans_dia, "Día", "Líneas", "", "Líneas"),
                     use_container_width=True,
                 )
 
                 # 5. Facturas por día (documentos únicos)
                 doc_col = "Documento"
                 if doc_col in diario.columns and diario[doc_col].replace("", pd.NA).notna().any():
+                    st.markdown("**Facturas por día**")
+                    _d5 = _tipo_pills(diario, "pills_facturas")
                     fact_dia = (
-                        diario.dropna(subset=[doc_col])
-                              .groupby("Dia")[doc_col].nunique().reset_index()
+                        _d5[_d5[doc_col].replace("", pd.NA).notna()]
+                           .groupby("Dia")[doc_col].nunique().reset_index()
                     )
                     fact_dia.columns = ["Día", "Facturas"]
                     st.plotly_chart(
-                        _ts_line(fact_dia, "Día", "Facturas",
-                                 "Facturas por día", "Facturas"),
+                        _ts_line(fact_dia, "Día", "Facturas", "", "Facturas"),
                         use_container_width=True,
                     )
             else:
