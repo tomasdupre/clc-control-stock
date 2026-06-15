@@ -2280,41 +2280,40 @@ elif page == "📈 Visualización de datos":
             if not mov_periodo.empty and "Fecha_dt" in mov_periodo.columns:
                 diario = mov_periodo.dropna(subset=["Fecha_dt"]).copy()
                 diario["Dia"] = diario["Fecha_dt"].dt.date
+                neto_d = diario.groupby("Dia")["Cantidad"].sum()
 
-                # 1. Evolución de unidades movidas por día (valor absoluto)
-                unid_dia = (
-                    diario.groupby("Dia")["Cantidad"].apply(lambda s: s.abs().sum())
-                    .reset_index()
-                )
-                unid_dia.columns = ["Día", "Unidades"]
-                st.plotly_chart(
-                    _ts_line(unid_dia, "Día", "Unidades",
-                             "Evolución de unidades movidas por día", "Unidades"),
-                    use_container_width=True,
-                )
+                # 1. Evolución del stock diario (acumulado desde la foto inicial).
+                # Arranca en stock_inicial y DEBE cerrar en stock_final_calc.
+                # Rellena los días sin movimientos con 0 (stock no cambia).
+                if pd.notna(fecha_inicial) and pd.notna(fecha_final):
+                    dias_rango = pd.date_range(
+                        fecha_inicial + pd.Timedelta(days=1), fecha_final, freq="D"
+                    )
+                    stock_d = pd.Series(0.0, index=[d.date() for d in dias_rango])
+                    stock_d.update(neto_d)
+                    stock_acum = (stock_inicial + stock_d.cumsum()).reset_index()
+                    stock_acum.columns = ["Día", "Stock"]
+                    fig_stock = px.line(
+                        stock_acum, x="Día", y="Stock",
+                        color_discrete_sequence=[_TEAL], title="<b>Evolución del stock diario</b>",
+                    )
+                    fig_stock.update_traces(line_width=1.2)
+                    fig_stock.add_hline(
+                        y=stock_final_foto, line_dash="dash", line_color="#555555", line_width=1,
+                        annotation_text=f"Foto final: {stock_final_foto:,.0f}",
+                        annotation_position="top right", annotation_font_size=10,
+                    )
+                    fig_stock.update_layout(
+                        title=dict(font=dict(size=13, color="#0c4a6e"), x=0.5),
+                        showlegend=False, margin=dict(t=40, b=10, l=10, r=10),
+                        plot_bgcolor="white", paper_bgcolor="white",
+                        yaxis=dict(showgrid=True, gridcolor="#eeeeee", title="Unidades"),
+                        xaxis=dict(title="", showgrid=False),
+                    )
+                    st.plotly_chart(fig_stock, use_container_width=True)
 
-                # 2. Evolución de SKUs distintos movidos por día
-                skus_dia = (
-                    diario.groupby("Dia")["CodigoArticulo"].nunique().reset_index()
-                )
-                skus_dia.columns = ["Día", "SKUs"]
-                st.plotly_chart(
-                    _ts_line(skus_dia, "Día", "SKUs",
-                             "Evolución de SKUs movidos por día", "SKUs"),
-                    use_container_width=True,
-                )
-
-                # 3. Cantidad de transacciones por día
-                trans_dia = diario.groupby("Dia").size().reset_index()
-                trans_dia.columns = ["Día", "Transacciones"]
-                st.plotly_chart(
-                    _ts_line(trans_dia, "Día", "Transacciones",
-                             "Cantidad de transacciones por día", "Transacciones"),
-                    use_container_width=True,
-                )
-
-                # 4. Evolución del neto diario (entradas - salidas)
-                neto_dia = diario.groupby("Dia")["Cantidad"].sum().reset_index()
+                # 2. Neto diario (entradas − salidas), barras verde/rojo
+                neto_dia = neto_d.reset_index()
                 neto_dia.columns = ["Día", "Neto"]
                 neto_dia["Color"] = neto_dia["Neto"].apply(
                     lambda v: "Ingreso" if v >= 0 else "Egreso"
@@ -2323,23 +2322,37 @@ elif page == "📈 Visualización de datos":
                     neto_dia, x="Día", y="Neto",
                     color="Color",
                     color_discrete_map={"Ingreso": _TEAL, "Egreso": "#dc3545"},
+                    title="<b>Neto diario (entradas − salidas)</b>",
                 )
-                promedio_neto = neto_dia["Neto"].mean()
                 fig_neto.add_hline(
-                    y=promedio_neto, line_dash="dash", line_color="#555555", line_width=1,
-                    annotation_text=f"Prom: {promedio_neto:,.0f}",
-                    annotation_position="top right", annotation_font_size=10,
+                    y=0, line_dash="dash", line_color="#888888", line_width=1,
                 )
                 fig_neto.update_layout(
-                    title=dict(text="<b>Neto diario de unidades (entradas − salidas)</b>",
-                               font_size=13, x=0.5),
+                    title=dict(font=dict(size=13, color="#0c4a6e"), x=0.5),
                     showlegend=False, margin=dict(t=40, b=10, l=10, r=10),
                     plot_bgcolor="white", paper_bgcolor="white",
-                    yaxis=dict(showgrid=True, gridcolor="#eeeeee", title="Unidades netas",
-                               title_font_size=11),
+                    yaxis=dict(showgrid=True, gridcolor="#eeeeee", title="Unidades"),
                     xaxis=dict(title="", showgrid=False),
                 )
                 st.plotly_chart(fig_neto, use_container_width=True)
+
+                # 3. SKUs distintos movidos por día
+                skus_dia = diario.groupby("Dia")["CodigoArticulo"].nunique().reset_index()
+                skus_dia.columns = ["Día", "SKUs"]
+                st.plotly_chart(
+                    _ts_line(skus_dia, "Día", "SKUs",
+                             "SKUs distintos movidos por día", "SKUs"),
+                    use_container_width=True,
+                )
+
+                # 4. Transacciones por día
+                trans_dia = diario.groupby("Dia").size().reset_index()
+                trans_dia.columns = ["Día", "Transacciones"]
+                st.plotly_chart(
+                    _ts_line(trans_dia, "Día", "Transacciones",
+                             "Transacciones por día", "Transacciones"),
+                    use_container_width=True,
+                )
             else:
                 st.info("Las series temporales requieren movimientos guardados. Volvé a ejecutar el análisis del cliente.")
 
