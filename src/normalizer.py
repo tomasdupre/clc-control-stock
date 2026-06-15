@@ -25,6 +25,7 @@ MOVEMENT_COLUMNS = [
     "Descripcion",
     "CantidadOriginal",
     "TipoMovimiento",
+    "Documento",
 ]
 
 

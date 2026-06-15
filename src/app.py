@@ -52,8 +52,8 @@ CLC_FIELDS_BY_TYPE = {
     # las visualizaciones por categoría (Balance de Masa).
     "maestro": ["CodigoArticulo", "Descripcion", "Categoria"],
     "stock": ["CodigoArticulo", "Fecha", "StockInformado"],
-    # TipoMovimiento es OPCIONAL: solo hace falta si vas a asignar signos por tipo (con IA).
-    "movimientos": ["CodigoArticulo", "Descripcion", "Fecha", "CantidadOriginal", "TipoMovimiento"],
+    # TipoMovimiento y Documento son OPCIONALES.
+    "movimientos": ["CodigoArticulo", "Descripcion", "Fecha", "CantidadOriginal", "TipoMovimiento", "Documento"],
 }
 
 
@@ -2350,6 +2350,20 @@ elif page == "📈 Visualización de datos":
                              "Líneas por día", "Líneas"),
                     use_container_width=True,
                 )
+
+                # 5. Facturas por día (documentos únicos)
+                doc_col = "Documento"
+                if doc_col in diario.columns and diario[doc_col].replace("", pd.NA).notna().any():
+                    fact_dia = (
+                        diario.dropna(subset=[doc_col])
+                              .groupby("Dia")[doc_col].nunique().reset_index()
+                    )
+                    fact_dia.columns = ["Día", "Facturas"]
+                    st.plotly_chart(
+                        _ts_line(fact_dia, "Día", "Facturas",
+                                 "Facturas por día", "Facturas"),
+                        use_container_width=True,
+                    )
             else:
                 st.info("Las series temporales requieren movimientos guardados. Volvé a ejecutar el análisis del cliente.")
 
