@@ -2166,6 +2166,183 @@ elif page == "📈 Visualización de datos":
                         use_container_width=True, hide_index=True,
                     )
 
+        # ── Dashboard de distribuciones + evolución temporal ─────────────────
+        st.divider()
+        _TEAL = "#17a2b8"
+        _TEAL_DARK = "#0d7b8a"
+
+        def _pct_bar(df_dist, x_col, y_col, title):
+            """Bar chart con porcentajes encima, estilo teal."""
+            total = df_dist[y_col].sum()
+            df_dist = df_dist.copy()
+            df_dist["Pct"] = df_dist[y_col] / total * 100 if total else 0
+            df_dist["PctLabel"] = df_dist["Pct"].apply(lambda v: f"{v:.0f}%")
+            fig = px.bar(
+                df_dist, x=x_col, y=y_col, text="PctLabel",
+                color_discrete_sequence=[_TEAL],
+            )
+            fig.update_traces(textposition="outside", marker_line_width=0)
+            fig.update_layout(
+                title=dict(text=f"<b>{title}</b>", font_size=13,
+                           bgcolor="#0c4a6e", font_color="white", x=0, xref="paper"),
+                showlegend=False, margin=dict(t=50, b=10, l=10, r=10),
+                plot_bgcolor="white", paper_bgcolor="white",
+                yaxis=dict(showgrid=True, gridcolor="#eeeeee", title=""),
+                xaxis=dict(title=""),
+            )
+            return fig
+
+        def _ts_line(df_ts, x_col, y_col, title, y_label=""):
+            """Serie temporal con línea de promedio punteada, estilo teal."""
+            avg = df_ts[y_col].mean() if not df_ts.empty else 0
+            fig = px.line(df_ts, x=x_col, y=y_col, color_discrete_sequence=[_TEAL])
+            fig.update_traces(line_width=1.2)
+            fig.add_hline(
+                y=avg, line_dash="dash", line_color="#555555", line_width=1,
+                annotation_text=f"Prom: {avg:,.0f}",
+                annotation_position="top right",
+                annotation_font_size=10,
+            )
+            fig.update_layout(
+                title=dict(text=f"<b>{title}</b>", font_size=13, x=0.5),
+                showlegend=False, margin=dict(t=40, b=10, l=10, r=10),
+                plot_bgcolor="white", paper_bgcolor="white",
+                yaxis=dict(showgrid=True, gridcolor="#eeeeee", title=y_label,
+                           title_font_size=11),
+                xaxis=dict(title="", showgrid=False),
+            )
+            return fig
+
+        # ── Distribuciones (columna izquierda) ──────────────────────────────
+        col_dist, col_ts = st.columns([2, 3])
+
+        with col_dist:
+            # 1. Distribución de SKUs según diferencia absoluta
+            if "DiferenciaAbsoluta" in fin.columns:
+                dif_abs = pd.to_numeric(fin["DiferenciaAbsoluta"], errors="coerce").fillna(0)
+                bins_dif = [0, 1, 5, 20, 100, float("inf")]
+                labels_dif = ["Sin dif.", "1-5", "5-20", "20-100", "100+"]
+                cats = pd.cut(dif_abs, bins=bins_dif, labels=labels_dif, right=False)
+                dist_dif = cats.value_counts().reindex(labels_dif, fill_value=0).reset_index()
+                dist_dif.columns = ["Rango", "SKUs"]
+                st.plotly_chart(
+                    _pct_bar(dist_dif, "Rango", "SKUs",
+                             "Distribución de SKUs según diferencia absoluta"),
+                    use_container_width=True,
+                )
+
+            # 2. Distribución de movimientos por cantidad absoluta
+            if not mov_periodo.empty:
+                q_abs = mov_periodo["Cantidad"].abs()
+                bins_mov = [0, 1, 5, 10, 50, 100, float("inf")]
+                labels_mov = ["0-1", "1-5", "5-10", "10-50", "50-100", "100+"]
+                cats_mov = pd.cut(q_abs, bins=bins_mov, labels=labels_mov, right=False)
+                dist_mov = cats_mov.value_counts().reindex(labels_mov, fill_value=0).reset_index()
+                dist_mov.columns = ["Rango", "Movimientos"]
+                st.plotly_chart(
+                    _pct_bar(dist_mov, "Rango", "Movimientos",
+                             "Distribución de movimientos por cantidad"),
+                    use_container_width=True,
+                )
+
+            # 3. Distribución de SKUs por estado de control
+            if "EstadoControl" in fin.columns:
+                estado = fin["EstadoControl"].astype(str).str.strip()
+                dist_est = estado.value_counts().reset_index()
+                dist_est.columns = ["Estado", "SKUs"]
+                dist_est = dist_est.sort_values("SKUs", ascending=False)
+                COLOR_ESTADO = {"OK": "#28a745", "Diferencia": "#dc3545"}
+                dist_est["Color"] = dist_est["Estado"].map(
+                    lambda e: COLOR_ESTADO.get(e, _TEAL)
+                )
+                total_est = dist_est["SKUs"].sum()
+                dist_est["PctLabel"] = (dist_est["SKUs"] / total_est * 100).apply(
+                    lambda v: f"{v:.0f}%"
+                )
+                fig_est = px.bar(
+                    dist_est, x="Estado", y="SKUs", text="PctLabel",
+                    color="Estado",
+                    color_discrete_map={"OK": "#28a745", "Diferencia": "#dc3545"},
+                )
+                fig_est.update_traces(textposition="outside", marker_line_width=0)
+                fig_est.update_layout(
+                    title=dict(text="<b>SKUs por estado de control</b>", font_size=13,
+                               bgcolor="#0c4a6e", font_color="white", x=0, xref="paper"),
+                    showlegend=False, margin=dict(t=50, b=10, l=10, r=10),
+                    plot_bgcolor="white", paper_bgcolor="white",
+                    yaxis=dict(showgrid=True, gridcolor="#eeeeee", title=""),
+                    xaxis=dict(title=""),
+                )
+                st.plotly_chart(fig_est, use_container_width=True)
+
+        # ── Series temporales (columna derecha) ─────────────────────────────
+        with col_ts:
+            if not mov_periodo.empty and "Fecha_dt" in mov_periodo.columns:
+                diario = mov_periodo.dropna(subset=["Fecha_dt"]).copy()
+                diario["Dia"] = diario["Fecha_dt"].dt.date
+
+                # 1. Evolución de unidades movidas por día (valor absoluto)
+                unid_dia = (
+                    diario.groupby("Dia")["Cantidad"].apply(lambda s: s.abs().sum())
+                    .reset_index()
+                )
+                unid_dia.columns = ["Día", "Unidades"]
+                st.plotly_chart(
+                    _ts_line(unid_dia, "Día", "Unidades",
+                             "Evolución de unidades movidas por día", "Unidades"),
+                    use_container_width=True,
+                )
+
+                # 2. Evolución de SKUs distintos movidos por día
+                skus_dia = (
+                    diario.groupby("Dia")["CodigoArticulo"].nunique().reset_index()
+                )
+                skus_dia.columns = ["Día", "SKUs"]
+                st.plotly_chart(
+                    _ts_line(skus_dia, "Día", "SKUs",
+                             "Evolución de SKUs movidos por día", "SKUs"),
+                    use_container_width=True,
+                )
+
+                # 3. Cantidad de transacciones por día
+                trans_dia = diario.groupby("Dia").size().reset_index()
+                trans_dia.columns = ["Día", "Transacciones"]
+                st.plotly_chart(
+                    _ts_line(trans_dia, "Día", "Transacciones",
+                             "Cantidad de transacciones por día", "Transacciones"),
+                    use_container_width=True,
+                )
+
+                # 4. Evolución del neto diario (entradas - salidas)
+                neto_dia = diario.groupby("Dia")["Cantidad"].sum().reset_index()
+                neto_dia.columns = ["Día", "Neto"]
+                neto_dia["Color"] = neto_dia["Neto"].apply(
+                    lambda v: "Ingreso" if v >= 0 else "Egreso"
+                )
+                fig_neto = px.bar(
+                    neto_dia, x="Día", y="Neto",
+                    color="Color",
+                    color_discrete_map={"Ingreso": _TEAL, "Egreso": "#dc3545"},
+                )
+                promedio_neto = neto_dia["Neto"].mean()
+                fig_neto.add_hline(
+                    y=promedio_neto, line_dash="dash", line_color="#555555", line_width=1,
+                    annotation_text=f"Prom: {promedio_neto:,.0f}",
+                    annotation_position="top right", annotation_font_size=10,
+                )
+                fig_neto.update_layout(
+                    title=dict(text="<b>Neto diario de unidades (entradas − salidas)</b>",
+                               font_size=13, x=0.5),
+                    showlegend=False, margin=dict(t=40, b=10, l=10, r=10),
+                    plot_bgcolor="white", paper_bgcolor="white",
+                    yaxis=dict(showgrid=True, gridcolor="#eeeeee", title="Unidades netas",
+                               title_font_size=11),
+                    xaxis=dict(title="", showgrid=False),
+                )
+                st.plotly_chart(fig_neto, use_container_width=True)
+            else:
+                st.info("Las series temporales requieren movimientos guardados. Volvé a ejecutar el análisis del cliente.")
+
         # ── Tabla por Unidad de Gestión (Categoria) ───────────────────────────
         st.divider()
         st.markdown("**Por Unidad de Gestión (categoría)**")
