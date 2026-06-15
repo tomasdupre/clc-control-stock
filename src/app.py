@@ -9,6 +9,7 @@ from pathlib import Path
 import anthropic
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 from dotenv import load_dotenv
 
@@ -17,7 +18,7 @@ load_dotenv()
 sys.path.insert(0, str(Path(__file__).parent))
 
 from column_mapper import PENDING_FIELD, mapping_dataframe_to_dict, normalize_text, propose_column_mapping
-from normalizer import export_normalized, normalize_code, normalize_master, normalize_movements, normalize_stock
+from normalizer import detect_footer_rows, export_normalized, normalize_code, normalize_master, normalize_movements, normalize_stock
 from stock_analyzer import build_calculation_consistency, run_stock_analysis
 from diagnosis_generator import generate_diagnosis
 import cloud_store
@@ -1149,6 +1150,38 @@ if page == "⚙️ Procesar":
                         f"Obligatorios para `{file_type}`: {', '.join(requeridos)}"
                     )
 
+                    # ── Detección de filas que no son datos (totales, recuentos) ──
+                    # Clave en session_state para guardar la decisión del usuario.
+                    excluir_key = f"excluir_footer__{key}"
+                    footer_rows = detect_footer_rows(df)
+                    if footer_rows:
+                        if excluir_key not in st.session_state:
+                            st.session_state[excluir_key] = True
+                        filas_desc = "; ".join(
+                            f"fila {r['idx'] + 1}: «{r['contenido']}» ({r['motivo']})"
+                            for r in footer_rows
+                        )
+                        excluir = st.checkbox(
+                            f"Excluir {len(footer_rows)} fila(s) al final que parecen no ser datos "
+                            f"(totales / recuentos del sistema)",
+                            value=st.session_state[excluir_key],
+                            key=excluir_key,
+                            help=f"Filas detectadas: {filas_desc}",
+                        )
+                        if excluir:
+                            indices_excluir = {r["idx"] for r in footer_rows}
+                            df = df[~df.index.isin(indices_excluir)].reset_index(drop=True)
+                            entry["df"] = df
+                            st.info(
+                                f"Se excluirán {len(footer_rows)} fila(s) al final. "
+                                f"La hoja tendrá {len(df):,} filas al normalizarse."
+                            )
+                        else:
+                            st.warning(
+                                f"Se incluirán las filas al final detectadas como posibles totales: {filas_desc}. "
+                                f"Si son filas de datos reales, podés dejar este casillero desmarcado."
+                            )
+
                     opciones_clc = clc_options_for(file_type)
                     if key not in st.session_state.proc_mappings:
                         propuesta = propose_column_mapping(df.columns, DICTIONARY_PATH)
@@ -1963,8 +1996,20 @@ elif page == "📈 Visualización de datos":
         # frágil porque el control y los movimientos pueden venir con el código en
         # formatos distintos —ceros a la izquierda, floats— y no matchear.) El neto de
         # todos los movimientos debe explicar el cambio entre fotos.
+        # La ventana respeta el parámetro de la corrida: si el análisis incluyó los
+        # movimientos de la fecha inicial (foto = apertura del día), acá también.
+        if cloud_archivo_control:
+            incluye_inicial = cloud_include_initial
+        else:
+            incluye_inicial = bool(
+                (local_run_metadata.get("parametros") or {}).get("include_initial_date_movements", False)
+            )
         if hay_mov:
-            en_periodo = (mov_f["Fecha_dt"] > fecha_inicial) & (mov_f["Fecha_dt"] <= fecha_final)
+            if incluye_inicial:
+                desde_inicial = mov_f["Fecha_dt"] >= fecha_inicial
+            else:
+                desde_inicial = mov_f["Fecha_dt"] > fecha_inicial
+            en_periodo = desde_inicial & (mov_f["Fecha_dt"] <= fecha_final)
             mov_periodo = mov_f[en_periodo].copy()
             mov_netos = mov_periodo["Cantidad"].sum()
         else:
@@ -1983,14 +2028,31 @@ elif page == "📈 Visualización de datos":
         a1.metric(f"Stock Inicial ({f_ini})", f"{stock_inicial:,.0f}")
         a2.metric("Movimientos Netos", f"{mov_netos:,.0f}")
         a3.metric(f"Stock Final foto ({f_fin})", f"{stock_final_foto:,.0f}")
-        a4.metric("Stock Final Calculado", f"{stock_final_calc:,.0f}")
+        a4.metric(
+            "Stock Final Calculado", f"{stock_final_calc:,.0f}",
+            delta=f"{-dif_unidades:,.0f} vs foto" if dif_unidades else "cierra con la foto",
+            delta_color="inverse" if dif_unidades else "off",
+        )
 
         b1, b2, b3, b4 = st.columns(4)
         b1.metric("Dif. Stock Unidades", f"{dif_unidades:,.0f}", delta_color="inverse")
         b2.metric("Dif. Stock %", f"{dif_pct:.2f}%", delta_color="inverse")
         if hay_mov:
-            b3.metric("Cantidad de Movimientos", f"{len(mov_f):,}")
-            b4.metric("Productos Movidos", f"{mov_f['CodigoArticulo'].nunique():,}")
+            b3.metric("Movimientos del período", f"{len(mov_periodo):,}")
+            b4.metric("Productos Movidos", f"{mov_periodo['CodigoArticulo'].nunique():,}")
+
+        if hay_mov:
+            if abs(dif_unidades) < 0.5:
+                st.success(
+                    f"✅ El balance cierra: Foto inicial ({stock_inicial:,.0f}) + Movimientos netos "
+                    f"({mov_netos:,.0f}) = Foto final ({stock_final_foto:,.0f})."
+                )
+            else:
+                st.warning(
+                    f"⚠️ Los movimientos no explican {dif_unidades:,.0f} unidades del cambio entre fotos "
+                    f"({stock_inicial:,.0f} → {stock_final_foto:,.0f}). Puede faltar una hoja de movimientos, "
+                    f"haber movimientos fuera del período, o un signo mal configurado."
+                )
 
         st.divider()
 
@@ -2000,13 +2062,41 @@ elif page == "📈 Visualización de datos":
                 "(se guarda al ejecutar el análisis). Volvé a ejecutar el análisis del cliente para verlo."
             )
         else:
+            # ── Waterfall: cómo se llega de la foto inicial a la final ─────────
+            st.markdown("**Balance: de la foto inicial a la final** (neto por tipo de movimiento)")
+            neto_por_tipo = (
+                mov_periodo.groupby("Tipo")["Cantidad"].sum().sort_values(ascending=False)
+            )
+            etiquetas = (
+                [f"Stock Inicial<br>{f_ini}"]
+                + neto_por_tipo.index.tolist()
+                + ["Stock Final<br>Calculado"]
+            )
+            valores = [stock_inicial] + neto_por_tipo.values.tolist() + [0]
+            medidas = ["absolute"] + ["relative"] * len(neto_por_tipo) + ["total"]
+            fig_w = go.Figure(go.Waterfall(
+                orientation="v", measure=medidas, x=etiquetas, y=valores,
+                text=[f"{v:,.0f}" for v in valores[:-1]] + [f"{stock_final_calc:,.0f}"],
+                textposition="outside",
+                connector={"line": {"color": "#bbbbbb"}},
+                increasing={"marker": {"color": "#28a745"}},
+                decreasing={"marker": {"color": "#dc3545"}},
+                totals={"marker": {"color": "#1f77b4"}},
+            ))
+            fig_w.add_hline(
+                y=stock_final_foto, line_dash="dash", line_color="#6c757d",
+                annotation_text=f"Foto final: {stock_final_foto:,.0f}",
+                annotation_position="top right",
+            )
+            fig_w.update_layout(showlegend=False, margin=dict(t=30, b=10), yaxis_title="Unidades")
+            st.plotly_chart(fig_w, use_container_width=True)
+
+            st.divider()
             col_izq, col_der = st.columns([3, 2])
 
             with col_izq:
                 st.markdown("**Movimientos por tipo** (verde suma stock, rojo lo resta)")
-                desglose = (
-                    mov_f.groupby("Tipo")["Cantidad"].sum().reset_index().sort_values("Cantidad")
-                )
+                desglose = neto_por_tipo.reset_index().sort_values("Cantidad")
                 desglose["Color"] = desglose["Cantidad"].apply(lambda v: "Ingreso" if v >= 0 else "Egreso")
                 fig = px.bar(
                     desglose, x="Cantidad", y="Tipo", orientation="h",
@@ -2017,32 +2107,64 @@ elif page == "📈 Visualización de datos":
                 fig.update_layout(showlegend=False, margin=dict(t=10, b=10), yaxis_title="", xaxis_title="")
                 st.plotly_chart(fig, use_container_width=True)
 
-            with col_der:
-                st.markdown("**Stock acumulado por mes**")
-                st.caption("Acumulado = Stock Inicial (foto) + movimientos del período acumulados. El último mes cierra en el Stock Final Calculado.")
-                # Usa exactamente los mismos movimientos del período que el KPI de arriba
-                # (mov_periodo), así el acumulado arranca en la foto inicial y cierra en
-                # el Stock Final Calculado.
-                mov_mes = mov_periodo.dropna(subset=["Fecha_dt"]).copy()
-                mov_mes["Mes"] = mov_mes["Fecha_dt"].dt.to_period("M").astype(str)
-                mensual = mov_mes.groupby("Mes")["Cantidad"].sum().reset_index()
-                mensual["Acumulado"] = stock_inicial + mensual["Cantidad"].cumsum()
+                st.markdown("**Detalle por tipo** (entradas y salidas por separado)")
+                tabla = mov_periodo.groupby("Tipo").agg(
+                    Movimientos=("Cantidad", "count"),
+                    Entradas=("Cantidad", lambda s: s[s > 0].sum()),
+                    Salidas=("Cantidad", lambda s: s[s < 0].sum()),
+                    Neto=("Cantidad", "sum"),
+                ).reset_index().sort_values("Neto")
                 st.dataframe(
-                    mensual.rename(columns={"Mes": "Mes-Año", "Cantidad": "Movimientos del mes"})
-                           .style.format({"Movimientos del mes": "{:,.0f}", "Acumulado": "{:,.0f}"}),
+                    tabla.style.format({
+                        "Movimientos": "{:,.0f}", "Entradas": "{:,.0f}",
+                        "Salidas": "{:,.0f}", "Neto": "{:,.0f}",
+                    }),
                     use_container_width=True, hide_index=True,
                 )
 
-            st.divider()
-            st.markdown("**Detalle del desglose por tipo**")
-            tabla = mov_f.groupby("Tipo").agg(
-                Movimientos=("Cantidad", "count"),
-                Neto=("Cantidad", "sum"),
-            ).reset_index().sort_values("Neto")
-            st.dataframe(
-                tabla.style.format({"Movimientos": "{:,.0f}", "Neto": "{:,.0f}"}),
-                use_container_width=True, hide_index=True,
-            )
+            with col_der:
+                st.markdown("**Stock acumulado por mes**")
+                st.caption(
+                    "Acumulado = Stock Inicial (foto) + movimientos acumulados. "
+                    "El último mes cierra en el Stock Final Calculado."
+                )
+                # Usa exactamente los mismos movimientos del período que los KPIs
+                # (mov_periodo). Los meses sin movimientos también se muestran (con 0),
+                # así la serie es continua entre la foto inicial y la final.
+                mov_mes = mov_periodo.dropna(subset=["Fecha_dt"]).copy()
+                mov_mes["Mes"] = mov_mes["Fecha_dt"].dt.to_period("M")
+                mensual = mov_mes.groupby("Mes")["Cantidad"].sum()
+                if pd.notna(fecha_inicial) and pd.notna(fecha_final):
+                    todos_meses = pd.period_range(fecha_inicial, fecha_final, freq="M")
+                    # El mes de la foto inicial solo se incluye si tuvo movimientos
+                    # posteriores a la foto (la foto es el cierre de ese mes).
+                    todos_meses = [m for m in todos_meses if m in set(mensual.index) or m > fecha_inicial.to_period("M")]
+                    mensual = mensual.reindex(todos_meses, fill_value=0)
+                mensual = mensual.reset_index()
+                mensual.columns = ["Mes", "Cantidad"]
+                mensual["Mes"] = mensual["Mes"].astype(str)
+                mensual["Acumulado"] = stock_inicial + mensual["Cantidad"].cumsum()
+
+                tab_graf, tab_tabla = st.tabs(["📈 Gráfico", "📋 Tabla"])
+                with tab_graf:
+                    serie = pd.concat([
+                        pd.DataFrame({"Mes": [f"Foto {f_ini}"], "Acumulado": [stock_inicial]}),
+                        mensual[["Mes", "Acumulado"]],
+                    ], ignore_index=True)
+                    fig_m = px.line(serie, x="Mes", y="Acumulado", markers=True)
+                    fig_m.add_hline(
+                        y=stock_final_foto, line_dash="dash", line_color="#6c757d",
+                        annotation_text=f"Foto final: {stock_final_foto:,.0f}",
+                        annotation_position="bottom right",
+                    )
+                    fig_m.update_layout(margin=dict(t=10, b=10), xaxis_title="", yaxis_title="Unidades")
+                    st.plotly_chart(fig_m, use_container_width=True)
+                with tab_tabla:
+                    st.dataframe(
+                        mensual.rename(columns={"Mes": "Mes-Año", "Cantidad": "Movimientos del mes"})
+                               .style.format({"Movimientos del mes": "{:,.0f}", "Acumulado": "{:,.0f}"}),
+                        use_container_width=True, hide_index=True,
+                    )
 
         # ── Tabla por Unidad de Gestión (Categoria) ───────────────────────────
         st.divider()

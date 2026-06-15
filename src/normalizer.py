@@ -67,6 +67,61 @@ def parse_date_series(series):
     return parsed.dt.date
 
 
+import re as _re
+
+# Patrones que indican filas de pie de página / totales, no datos reales.
+_FOOTER_PATTERNS = _re.compile(
+    r"^\s*("
+    r"recuento\s*=|suma\s*=|total\s*=|count\s*=|sum\s*=|subtotal\s*=|"
+    r"recuento:|suma:|total:|grand total"
+    r")",
+    flags=_re.IGNORECASE,
+)
+
+
+def detect_footer_rows(df, scan_tail=10):
+    """
+    Detecta filas al final del DataFrame que parecen ser notas/totales del sistema
+    y no datos reales (ej. "Recuento=201518", "Suma=141169").
+
+    Estrategia: revisa las últimas `scan_tail` filas buscando:
+      1. Filas donde >70% de las celdas están vacías/NaN Y al menos una celda
+         contiene un patrón de total/recuento.
+      2. O donde cualquier celda encaja directamente con _FOOTER_PATTERNS.
+
+    Devuelve una lista de dicts con info de las filas sospechosas:
+      [{"idx": índice_original, "contenido": str_de_la_fila, "motivo": str}, ...]
+    """
+    if df.empty:
+        return []
+
+    tail = df.tail(scan_tail)
+    sospechosas = []
+
+    for idx, row in tail.iterrows():
+        celdas = [str(v).strip() for v in row if pd.notna(v) and str(v).strip() not in ("", "nan")]
+        if not celdas:
+            continue
+
+        # ¿Alguna celda tiene patrón de total/recuento?
+        tiene_patron = any(_FOOTER_PATTERNS.search(c) for c in celdas)
+
+        # ¿La fila está mayoritariamente vacía?
+        total_cols = len(row)
+        vacias = total_cols - len(celdas)
+        mayoria_vacia = (vacias / total_cols) > 0.7 if total_cols > 1 else False
+
+        if tiene_patron or (mayoria_vacia and len(celdas) <= 2):
+            motivo = "patrón de total/recuento detectado" if tiene_patron else "fila casi vacía al final"
+            sospechosas.append({
+                "idx": idx,
+                "contenido": " | ".join(celdas[:5]),
+                "motivo": motivo,
+            })
+
+    return sospechosas
+
+
 def normalize_code(value):
     if pd.isna(value):
         return ""
