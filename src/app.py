@@ -2342,12 +2342,12 @@ elif page == "📈 Visualización de datos":
                     use_container_width=True,
                 )
 
-                # 4. Transacciones por día
+                # 4. Líneas por día
                 trans_dia = diario.groupby("Dia").size().reset_index()
-                trans_dia.columns = ["Día", "Transacciones"]
+                trans_dia.columns = ["Día", "Líneas"]
                 st.plotly_chart(
-                    _ts_line(trans_dia, "Día", "Transacciones",
-                             "Transacciones por día", "Transacciones"),
+                    _ts_line(trans_dia, "Día", "Líneas",
+                             "Líneas por día", "Líneas"),
                     use_container_width=True,
                 )
             else:
