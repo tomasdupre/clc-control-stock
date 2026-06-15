@@ -161,6 +161,29 @@ def save_corrida(nombre_cliente, parametros, resumen, control_df,
     return inserted.data[0]["id"]
 
 
+def load_corrida_by_id(corrida_id):
+    """Carga una corrida por su ID. Devuelve el dict de la fila o None si no existe."""
+    client = get_client()
+    res = (
+        client.table("corridas")
+        .select("id,creado_en,parametros,resumen,archivo_control,archivo_reporte_xlsx,archivo_diagnostico,nota,cliente_id")
+        .eq("id", corrida_id)
+        .execute()
+    )
+    if res.data:
+        return res.data[0]
+    return None
+
+
+def get_cliente_nombre(cliente_id):
+    """Devuelve el nombre del cliente por su ID."""
+    client = get_client()
+    res = client.table("clientes").select("nombre").eq("id", cliente_id).execute()
+    if res.data:
+        return res.data[0]["nombre"]
+    return ""
+
+
 def list_corridas(cliente_id):
     """Lista las corridas de un cliente, de la más nueva a la más vieja."""
     client = get_client()

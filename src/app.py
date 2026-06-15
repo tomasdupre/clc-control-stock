@@ -767,53 +767,89 @@ with st.sidebar:
     report_label = None
     cloud_on = cloud_store.is_configured()
 
+    # Query params: ?corrida_id=<id> permite compartir un link directo a una corrida
+    _qp = st.query_params
+    _qp_corrida_id = _qp.get("corrida_id", "")
+
     fuente = "Nube"
     if cloud_on:
-        fuente = st.radio("Fuente de reportes", ["Nube", "Local"], horizontal=True)
+        fuente = st.radio("Fuente de reportes", ["Nube", "Local"], horizontal=True,
+                          index=0 if _qp_corrida_id else 0)
     else:
         fuente = "Local"
 
     if fuente == "Nube":
-        try:
-            clientes = cloud_store.list_clientes()
-        except Exception as exc:
-            clientes = []
-            st.warning(f"No se pudo leer la nube: {exc}")
-        if clientes:
-            nombres = {c["nombre"]: c["id"] for c in clientes}
-            cli_sel = st.selectbox("Cliente", list(nombres.keys()))
+        # ── Carga directa por link compartido ────────────────────────────────
+        if _qp_corrida_id and cloud_on:
             try:
-                corridas = cloud_store.list_corridas(nombres[cli_sel])
+                _corrida_link = cloud_store.load_corrida_by_id(_qp_corrida_id)
             except Exception:
-                corridas = []
-            if corridas:
-                def _corrida_label(c):
-                    r = c.get("resumen") or {}
-                    fecha = str(c.get("creado_en", ""))[:16].replace("T", " ")
-                    ok = r.get("total_registros_ok", "?")
-                    dif = r.get("total_registros_con_diferencia", "?")
-                    try:
-                        ok = int(ok); dif = int(dif)
-                    except Exception:
-                        pass
-                    return f"{fecha} · OK {ok} / dif {dif}"
-                opts = {_corrida_label(c): c for c in corridas}
-                corr_sel = st.selectbox("Corrida", list(opts.keys()))
-                corrida = opts[corr_sel]
+                _corrida_link = None
+            if _corrida_link:
+                corrida = _corrida_link
+                cli_nombre = cloud_store.get_cliente_nombre(corrida.get("cliente_id", ""))
                 cloud_include_initial = bool(
                     (corrida.get("parametros") or {}).get("include_initial_date_movements", False)
                 )
                 try:
                     cloud_control_full = load_cloud_control(corrida["archivo_control"])
                     cloud_archivo_control = corrida["archivo_control"]
-                    report_label = f"{cli_sel} · {corr_sel}"
-                    st.success("Corrida cargada desde la nube")
+                    fecha = str(corrida.get("creado_en", ""))[:16].replace("T", " ")
+                    report_label = f"{cli_nombre} · {fecha}"
+                    st.success(f"Corrida cargada desde link compartido · {report_label}")
                 except Exception as exc:
-                    st.error(f"No se pudo cargar la corrida: {exc}")
+                    st.error(f"No se pudo cargar la corrida del link: {exc}")
             else:
-                st.warning("Ese cliente todavía no tiene corridas guardadas.")
+                st.warning("El link no corresponde a ninguna corrida existente.")
+
+        # ── Selector manual ──────────────────────────────────────────────────
         else:
-            st.info("Todavía no hay corridas en la nube. Generá un análisis en **Procesar**.")
+            try:
+                clientes = cloud_store.list_clientes()
+            except Exception as exc:
+                clientes = []
+                st.warning(f"No se pudo leer la nube: {exc}")
+            if clientes:
+                nombres = {c["nombre"]: c["id"] for c in clientes}
+                cli_sel = st.selectbox("Cliente", list(nombres.keys()))
+                try:
+                    corridas = cloud_store.list_corridas(nombres[cli_sel])
+                except Exception:
+                    corridas = []
+                if corridas:
+                    def _corrida_label(c):
+                        r = c.get("resumen") or {}
+                        fecha = str(c.get("creado_en", ""))[:16].replace("T", " ")
+                        ok = r.get("total_registros_ok", "?")
+                        dif = r.get("total_registros_con_diferencia", "?")
+                        try:
+                            ok = int(ok); dif = int(dif)
+                        except Exception:
+                            pass
+                        return f"{fecha} · OK {ok} / dif {dif}"
+                    opts = {_corrida_label(c): c for c in corridas}
+                    corr_sel = st.selectbox("Corrida", list(opts.keys()))
+                    corrida = opts[corr_sel]
+                    cloud_include_initial = bool(
+                        (corrida.get("parametros") or {}).get("include_initial_date_movements", False)
+                    )
+                    try:
+                        cloud_control_full = load_cloud_control(corrida["archivo_control"])
+                        cloud_archivo_control = corrida["archivo_control"]
+                        report_label = f"{cli_sel} · {corr_sel}"
+                        # Actualizar la URL para que el link sea compartible
+                        st.query_params["corrida_id"] = str(corrida["id"])
+                        st.success("Corrida cargada desde la nube")
+                        # Botón de link compartible
+                        corrida_url = f"?corrida_id={corrida['id']}"
+                        st.code(corrida_url, language=None)
+                        st.caption("Pasale ese link a un compañero para que abra esta corrida directamente.")
+                    except Exception as exc:
+                        st.error(f"No se pudo cargar la corrida: {exc}")
+                else:
+                    st.warning("Ese cliente todavía no tiene corridas guardadas.")
+            else:
+                st.info("Todavía no hay corridas en la nube. Generá un análisis en **Procesar**.")
     else:
         reports = find_available_reports()
         if reports:
