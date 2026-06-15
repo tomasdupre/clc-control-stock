@@ -2135,23 +2135,20 @@ elif page == "📈 Visualización de datos":
                 mov_mes["Mes"] = mov_mes["Fecha_dt"].dt.to_period("M")
                 mensual = mov_mes.groupby("Mes")["Cantidad"].sum()
                 if pd.notna(fecha_inicial) and pd.notna(fecha_final):
+                    # Incluye SIEMPRE el mes de la foto inicial (con cantidad 0):
+                    # ese es el punto de partida del acumulado = stock_inicial.
                     todos_meses = pd.period_range(fecha_inicial, fecha_final, freq="M")
-                    # El mes de la foto inicial solo se incluye si tuvo movimientos
-                    # posteriores a la foto (la foto es el cierre de ese mes).
-                    todos_meses = [m for m in todos_meses if m in set(mensual.index) or m > fecha_inicial.to_period("M")]
                     mensual = mensual.reindex(todos_meses, fill_value=0)
                 mensual = mensual.reset_index()
                 mensual.columns = ["Mes", "Cantidad"]
                 mensual["Mes"] = mensual["Mes"].astype(str)
+                # El primer mes (foto inicial) tiene Cantidad=0 → Acumulado = stock_inicial.
                 mensual["Acumulado"] = stock_inicial + mensual["Cantidad"].cumsum()
 
                 tab_graf, tab_tabla = st.tabs(["📈 Gráfico", "📋 Tabla"])
                 with tab_graf:
-                    serie = pd.concat([
-                        pd.DataFrame({"Mes": [f"Foto {f_ini}"], "Acumulado": [stock_inicial]}),
-                        mensual[["Mes", "Acumulado"]],
-                    ], ignore_index=True)
-                    fig_m = px.line(serie, x="Mes", y="Acumulado", markers=True)
+                    fig_m = px.line(mensual, x="Mes", y="Acumulado", markers=True,
+                                    color_discrete_sequence=["#1f77b4"])
                     fig_m.add_hline(
                         y=stock_final_foto, line_dash="dash", line_color="#6c757d",
                         annotation_text=f"Foto final: {stock_final_foto:,.0f}",
