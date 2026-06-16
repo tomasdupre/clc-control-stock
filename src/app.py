@@ -258,6 +258,71 @@ def load_viz_movimientos(cloud_archivo_control_param, report_path_str):
     return load_active_movements(cloud_archivo_control_param, report_path_str)
 
 
+@st.cache_data(show_spinner=False)
+def prepare_viz_movimientos(cloud_archivo_control_param, report_path_str):
+    """
+    Movimientos ya enriquecidos para el dashboard (Tipo, Cantidad, Fecha_dt, Dia).
+
+    PERFORMANCE: este enriquecimiento (to_numeric, parseo de fechas y clasificacion
+    de tipos sobre cientos de miles de filas) NO depende de los filtros del dashboard
+    y antes se rehacia en cada click. Cacheado por corrida, corre una sola vez.
+    La clasificacion de hoja generica es vectorizada (sin apply fila por fila).
+    """
+    mov = load_viz_movimientos(cloud_archivo_control_param, report_path_str)
+    if mov is None or mov.empty:
+        return pd.DataFrame()
+    mov = mov.copy()
+    mov["Cantidad"] = pd.to_numeric(mov.get("CantidadNormalizada"), errors="coerce").fillna(0)
+    tipo = mov.get("TipoMovimiento", pd.Series("", index=mov.index)).fillna("").astype(str).str.strip()
+    hoja = mov.get("HojaOrigen", pd.Series("", index=mov.index)).fillna("").astype(str).str.strip()
+    # Tipo = TipoMovimiento (si esta); si no, el nombre de la hoja de origen.
+    # Los nombres de hoja genericos (Sheet, Hoja1, etc.) no son un tipo real:
+    # se muestran como "Sin tipo" para no ensuciar el desglose.
+    GENERICOS = {"sheet", "sheet1", "sheet 1", "hoja", "hoja1", "hoja 1", "hoja1 ", "", "nan"}
+    hoja_limpia = hoja.where(~hoja.str.lower().isin(GENERICOS), "Sin tipo")
+    mov["Tipo"] = tipo.where(tipo != "", hoja_limpia).replace("", "Sin tipo")
+    mov["Fecha_dt"] = pd.to_datetime(mov.get("Fecha"), errors="coerce")
+    mov["Dia"] = mov["Fecha_dt"].dt.date
+    return mov
+
+
+@st.cache_data(show_spinner=False)
+def prepare_balance_control(cache_key, _control_full):
+    """
+    Fotos del balance de masa (inicial/final) calculadas una sola vez por corrida.
+
+    PERFORMANCE: antes se copiaba y re-parseaba control_full en cada rerun. `cache_key`
+    identifica la corrida; `_control_full` lleva guion bajo para que Streamlit no lo
+    hashee (es grande). Devuelve (fecha_inicial, fecha_final, fin, stock_inicial,
+    stock_final_foto). La logica de calculo es identica a la anterior.
+    """
+    cf = _control_full.copy()
+    cf["Fecha_dt"] = pd.to_datetime(cf["Fecha"], errors="coerce")
+    cf["_StockInf_num"] = pd.to_numeric(cf.get("StockInformado"), errors="coerce").fillna(0)
+    fecha_inicial = cf["Fecha_dt"].min()
+    fecha_final = cf["Fecha_dt"].max()
+    fin = cf[cf["Fecha_dt"] == fecha_final].copy()
+    for c in ["StockInicial", "MovimientosAcumulados", "StockCalculado", "StockInformado", "Diferencia"]:
+        fin[c] = pd.to_numeric(fin.get(c), errors="coerce").fillna(0)
+    stock_inicial = cf.loc[cf["Fecha_dt"] == fecha_inicial, "_StockInf_num"].sum()
+    stock_final_foto = cf.loc[cf["Fecha_dt"] == fecha_final, "_StockInf_num"].sum()
+    return fecha_inicial, fecha_final, fin, stock_inicial, stock_final_foto
+
+
+@st.cache_data(show_spinner=False)
+def cached_calculation_consistency(cache_key, include_initial, _control_full, _movements):
+    """
+    Auditoria de consistencia cacheada por corrida.
+
+    PERFORMANCE: build_calculation_consistency hace merge + recalculo sobre todos los
+    puntos de control y se llamaba en cada rerun (incluso clickeando el dashboard, que
+    no la usa). Cacheada por corrida + flag de fecha inicial. Logica intacta.
+    """
+    return build_calculation_consistency(
+        _control_full, _movements, include_initial_date_movements=include_initial,
+    )
+
+
 @st.cache_data(show_spinner="Cargando reporte...")
 def load_report(path_str):
     """Carga las hojas livianas del reporte. Las pesadas (movimientos) se leen aparte."""
@@ -910,6 +975,9 @@ if hay_reporte and page != "⚙️ Procesar":
         cloud_archivo_control,
         str(report_path) if report_path is not None else "",
     )
+    # Clave estable de la corrida: identifica nube o local para cachear los
+    # preprocesamientos pesados (consistencia, fotos del balance) por corrida.
+    _corrida_key = cloud_archivo_control or (str(report_path) if report_path is not None else "")
     if cloud_control_full is not None:
         # Reporte cargado desde la nube (parquet con la tabla de control completa).
         # Reconstruimos las hojas que usan el chat y el detalle a partir del control.
@@ -927,10 +995,9 @@ if hay_reporte and page != "⚙️ Procesar":
             "resumen": resumen_cloud,
             "advertencias": pd.DataFrame(),
             "duplicados_movimientos": pd.DataFrame(),
-            "consistencia_calculo": build_calculation_consistency(
-                control_full,
-                active_movements,
-                include_initial_date_movements=cloud_include_initial,
+            "consistencia_calculo": cached_calculation_consistency(
+                _corrida_key, bool(cloud_include_initial),
+                control_full, active_movements,
             ),
         }
     else:
@@ -938,10 +1005,9 @@ if hay_reporte and page != "⚙️ Procesar":
         control_full = data["control_stock"]
         if data.get("consistencia_calculo", pd.DataFrame()).empty and active_movements is not None and not active_movements.empty:
             params = local_run_metadata.get("parametros") or {}
-            data["consistencia_calculo"] = build_calculation_consistency(
-                control_full,
-                active_movements,
-                include_initial_date_movements=bool(params.get("include_initial_date_movements", False)),
+            data["consistencia_calculo"] = cached_calculation_consistency(
+                _corrida_key, bool(params.get("include_initial_date_movements", False)),
+                control_full, active_movements,
             )
     es_base = marcar_lineas_base(control_full)
     lineas_base_ocultas = 0
@@ -1974,41 +2040,23 @@ elif page == "📈 Visualización de datos":
         # descarta los productos que existían al inicio pero ya no están al final,
         # lo que distorsiona el balance de masa. El balance correcto es:
         #     Foto inicial  +  (todos los movimientos del período)  =  Foto final
-        cf = control_full.copy()
-        cf["Fecha_dt"] = pd.to_datetime(cf["Fecha"], errors="coerce")
-        cf["_StockInf_num"] = pd.to_numeric(cf.get("StockInformado"), errors="coerce").fillna(0)
-        fecha_inicial = cf["Fecha_dt"].min()
-        fecha_final = cf["Fecha_dt"].max()
-        fin = cf[cf["Fecha_dt"] == fecha_final].copy()
-        for c in ["StockInicial", "MovimientosAcumulados", "StockCalculado", "StockInformado", "Diferencia"]:
-            fin[c] = pd.to_numeric(fin.get(c), errors="coerce").fillna(0)
-
-        # Foto de fin de mes: suma del Stock Informado en el primer y último corte.
-        stock_inicial = cf.loc[cf["Fecha_dt"] == fecha_inicial, "_StockInf_num"].sum()
-        stock_final_foto = cf.loc[cf["Fecha_dt"] == fecha_final, "_StockInf_num"].sum()
+        # Fotos del balance: cacheadas por corrida (ver prepare_balance_control).
+        # Antes esto se recalculaba en cada click; ahora corre una vez por corrida.
+        fecha_inicial, fecha_final, fin, stock_inicial, stock_final_foto = prepare_balance_control(
+            _corrida_key, control_full,
+        )
 
         f_ini = fecha_inicial.date().isoformat() if pd.notna(fecha_inicial) else "—"
         f_fin = fecha_final.date().isoformat() if pd.notna(fecha_final) else "—"
 
         # ── Movimientos (para el desglose por tipo y por mes) ──────────────────
-        mov = load_viz_movimientos(
+        # Ya vienen enriquecidos y cacheados por corrida (Tipo, Cantidad, Fecha_dt).
+        mov = prepare_viz_movimientos(
             cloud_archivo_control,
             str(report_path) if report_path is not None else "",
         )
         hay_mov = not mov.empty
         if hay_mov:
-            mov = mov.copy()
-            mov["Cantidad"] = pd.to_numeric(mov.get("CantidadNormalizada"), errors="coerce").fillna(0)
-            tipo = mov.get("TipoMovimiento", pd.Series("", index=mov.index)).fillna("").astype(str).str.strip()
-            hoja = mov.get("HojaOrigen", pd.Series("", index=mov.index)).fillna("").astype(str).str.strip()
-            # Tipo = TipoMovimiento (si está); si no, el nombre de la hoja de origen.
-            # Los nombres de hoja genéricos (Sheet, Hoja1, etc.) no son un tipo real:
-            # se muestran como "Sin tipo" para no ensuciar el desglose.
-            GENERICOS = {"sheet", "sheet1", "sheet 1", "hoja", "hoja1", "hoja 1", "hoja1 ", "", "nan"}
-            hoja_limpia = hoja.apply(lambda h: "Sin tipo" if str(h).strip().lower() in GENERICOS else h)
-            mov["Tipo"] = tipo.where(tipo != "", hoja_limpia).replace("", "Sin tipo")
-            mov["Fecha_dt"] = pd.to_datetime(mov.get("Fecha"), errors="coerce")
-
             mov_f = mov
         else:
             mov_f = pd.DataFrame()
