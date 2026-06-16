@@ -978,6 +978,10 @@ if hay_reporte and page != "⚙️ Procesar":
     # Clave estable de la corrida: identifica nube o local para cachear los
     # preprocesamientos pesados (consistencia, fotos del balance) por corrida.
     _corrida_key = cloud_archivo_control or (str(report_path) if report_path is not None else "")
+    # La auditoria de consistencia (merge + recalculo) solo la consumen el Resumen
+    # y el chat. En el dashboard y el detalle no se usa: la diferimos para no pagar
+    # ni siquiera la copia del dataframe cacheado en cada interaccion del dashboard.
+    _needs_consistencia = page in ("📊 Resumen", "💬 Consultar con IA")
     if cloud_control_full is not None:
         # Reporte cargado desde la nube (parquet con la tabla de control completa).
         # Reconstruimos las hojas que usan el chat y el detalle a partir del control.
@@ -995,15 +999,20 @@ if hay_reporte and page != "⚙️ Procesar":
             "resumen": resumen_cloud,
             "advertencias": pd.DataFrame(),
             "duplicados_movimientos": pd.DataFrame(),
-            "consistencia_calculo": cached_calculation_consistency(
-                _corrida_key, bool(cloud_include_initial),
-                control_full, active_movements,
+            "consistencia_calculo": (
+                cached_calculation_consistency(
+                    _corrida_key, bool(cloud_include_initial),
+                    control_full, active_movements,
+                )
+                if _needs_consistencia else pd.DataFrame()
             ),
         }
     else:
         data = load_report(str(report_path))
         control_full = data["control_stock"]
-        if data.get("consistencia_calculo", pd.DataFrame()).empty and active_movements is not None and not active_movements.empty:
+        if (_needs_consistencia
+                and data.get("consistencia_calculo", pd.DataFrame()).empty
+                and active_movements is not None and not active_movements.empty):
             params = local_run_metadata.get("parametros") or {}
             data["consistencia_calculo"] = cached_calculation_consistency(
                 _corrida_key, bool(params.get("include_initial_date_movements", False)),
