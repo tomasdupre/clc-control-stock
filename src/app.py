@@ -2289,12 +2289,29 @@ elif page == "📈 Visualización de datos":
             )
             return fig
 
+        def _date_xaxis(df, x_col):
+            """
+            Configuración del eje X de fechas:
+            - Período completo (varios puntos): eje de fechas con ticks mes/año,
+              auto-espaciados por Plotly (limpio, como antes).
+            - Un solo día seleccionado (1 punto): se pasa a categoría y se muestra
+              solo esa fecha, sin que Plotly interpole horas alrededor de la medianoche.
+            Modifica df[x_col] in-place a string solo en el caso de un punto (el caller
+            siempre pasa una copia).
+            """
+            base = dict(title="", showgrid=False)
+            if len(df) <= 2:
+                df[x_col] = df[x_col].astype(str)
+                base["type"] = "category"
+            else:
+                base["type"] = "date"
+                base["tickformat"] = "%b %Y"
+            return base
+
         def _ts_line(df_ts, x_col, y_col, title, y_label=""):
             """Serie temporal con marcadores clickeables y línea de promedio punteada."""
             df_ts = df_ts.copy()
-            # Convertir fechas a string para que el eje X muestre solo la fecha
-            # sin que Plotly interpole timestamps cuando hay un único punto.
-            df_ts[x_col] = df_ts[x_col].astype(str)
+            _xaxis = _date_xaxis(df_ts, x_col)
             avg = df_ts[y_col].mean() if not df_ts.empty else 0
             fig = px.line(df_ts, x=x_col, y=y_col, color_discrete_sequence=[_TEAL])
             fig.update_traces(line_width=1.5, mode="lines+markers",
@@ -2311,7 +2328,7 @@ elif page == "📈 Visualización de datos":
                 plot_bgcolor="white", paper_bgcolor="white",
                 yaxis=dict(showgrid=True, gridcolor="#eeeeee", title=y_label,
                            title_font_size=11, tickformat=",.0f"),
-                xaxis=dict(title="", showgrid=False, type="category"),
+                xaxis=_xaxis,
                 clickmode="event+select",
             )
             if title:
@@ -2540,9 +2557,8 @@ elif page == "📈 Visualización de datos":
                     stock_show = stock_acum
                     _s_mode = "lines+markers"
                     _s_msize = 3
-                # Convertir a string para evitar escala de timestamps en Plotly
                 stock_show = stock_show.copy()
-                stock_show["Día"] = stock_show["Día"].astype(str)
+                _xaxis_stock = _date_xaxis(stock_show, "Día")
                 fig_stock = px.line(stock_show, x="Día", y="Stock",
                                     color_discrete_sequence=[_TEAL])
                 fig_stock.update_traces(line_width=1.5, mode=_s_mode,
@@ -2558,7 +2574,7 @@ elif page == "📈 Visualización de datos":
                     plot_bgcolor="white", paper_bgcolor="white",
                     yaxis=dict(showgrid=True, gridcolor="#eeeeee", title="Unidades",
                                tickformat=",.0f"),
-                    xaxis=dict(title="", showgrid=False, type="category"),
+                    xaxis=_xaxis_stock,
                     clickmode="event+select",
                 )
                 _ev_stock = st.plotly_chart(
@@ -2573,7 +2589,7 @@ elif page == "📈 Visualización de datos":
                 if not _neto_d2.empty:
                     neto_dia = _neto_d2.reset_index()
                     neto_dia.columns = ["Día", "Neto"]
-                    neto_dia["Día"] = neto_dia["Día"].astype(str)
+                    _xaxis_neto = _date_xaxis(neto_dia, "Día")
                     neto_dia["Color"] = neto_dia["Neto"].apply(
                         lambda v: "Ingreso" if v >= 0 else "Egreso"
                     )
@@ -2585,7 +2601,7 @@ elif page == "📈 Visualización de datos":
                         plot_bgcolor="white", paper_bgcolor="white",
                         yaxis=dict(showgrid=True, gridcolor="#eeeeee", title="Unidades",
                                    tickformat=",.0f"),
-                        xaxis=dict(title="", showgrid=False, type="category"),
+                        xaxis=_xaxis_neto,
                         clickmode="event+select",
                     )
                     _ev_neto = st.plotly_chart(
