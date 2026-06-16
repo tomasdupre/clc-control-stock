@@ -2218,10 +2218,11 @@ elif page == "📈 Visualización de datos":
             return fig
 
         def _ts_line(df_ts, x_col, y_col, title, y_label=""):
-            """Serie temporal con línea de promedio punteada, estilo teal."""
+            """Serie temporal con marcadores clickeables y línea de promedio punteada."""
             avg = df_ts[y_col].mean() if not df_ts.empty else 0
             fig = px.line(df_ts, x=x_col, y=y_col, color_discrete_sequence=[_TEAL])
-            fig.update_traces(line_width=1.2)
+            fig.update_traces(line_width=1.5, mode="lines+markers",
+                              marker=dict(size=4, color=_TEAL))
             fig.add_hline(
                 y=avg, line_dash="dash", line_color="#555555", line_width=1,
                 annotation_text=f"Prom: {avg:,.0f}",
@@ -2296,7 +2297,11 @@ elif page == "📈 Visualización de datos":
             _diario_base = mov_periodo.dropna(subset=["Fecha_dt"]).copy()
             _diario_base["Dia"] = _diario_base["Fecha_dt"].dt.date
 
+        # _diario_f: con TODOS los filtros (fecha+tipo+estado) → para distribuciones
+        # _diario_ts: sin filtro de fecha → para series temporales (muestran período completo)
         _diario_f = _filtrar_diario(_diario_base, fin, _filtros) if not _diario_base.empty else pd.DataFrame()
+        _filtros_sin_fecha = {k: v for k, v in _filtros.items() if k != "fecha"}
+        _diario_ts = _filtrar_diario(_diario_base, fin, _filtros_sin_fecha) if not _diario_base.empty else pd.DataFrame()
         _fin_f = _filtrar_fin(fin, _diario_base, _filtros)
         _fecha_hl = _filtros.get("fecha")
 
@@ -2402,18 +2407,33 @@ elif page == "📈 Visualización de datos":
                     fig_tipo, on_select="rerun", key="ch_dist_tipo", use_container_width=True,
                 )
 
+        # ── Panel KPI del día seleccionado ────────────────────────────────────
+        if _fecha_hl and not _diario_ts.empty:
+            try:
+                _dia_dt = pd.to_datetime(_fecha_hl).date()
+                _dia_data = _diario_ts[_diario_ts["Dia"] == _dia_dt]
+                if not _dia_data.empty:
+                    st.markdown(f"##### Detalle del **{_fecha_hl}**")
+                    _k1, _k2, _k3, _k4 = st.columns(4)
+                    _k1.metric("Líneas", f"{len(_dia_data):,}")
+                    _k2.metric("SKUs distintos", f"{_dia_data['CodigoArticulo'].nunique():,}")
+                    _k3.metric("Neto del día", f"{_dia_data['Cantidad'].sum():,.0f}")
+                    doc_col_kpi = "Documento"
+                    if doc_col_kpi in _dia_data.columns:
+                        _nfact = _dia_data[doc_col_kpi].replace("", pd.NA).dropna().nunique()
+                        _k4.metric("Facturas", f"{_nfact:,}")
+            except Exception:
+                pass
+
         # ── Series temporales ─────────────────────────────────────────────────
+        # Las series siempre muestran el período completo (usan _diario_ts, sin
+        # filtro de fecha). La fecha seleccionada se resalta con línea vertical
+        # y marcador naranja. Las distribuciones sí filtran por fecha (_diario_f).
         _ev_stock = _ev_neto = _ev_skus = _ev_lineas = _ev_fact = None
         if not _diario_base.empty:
-            # Stock diario: muestra la curva completa con tipo/estado filtrados
-            # pero SIN el filtro de fecha, para mantener el contexto visual.
-            # Se agrega una línea vertical naranja en la fecha seleccionada.
             if pd.notna(fecha_inicial) and pd.notna(fecha_final):
                 st.markdown("**Evolución del stock diario**")
-                _d1_ts = _filtrar_diario(
-                    _diario_base, fin, {k: v for k, v in _filtros.items() if k != "fecha"}
-                )
-                _neto_d1 = _d1_ts.groupby("Dia")["Cantidad"].sum()
+                _neto_d1 = _diario_ts.groupby("Dia")["Cantidad"].sum()
                 dias_rango = pd.date_range(
                     fecha_inicial + pd.Timedelta(days=1), fecha_final, freq="D"
                 )
@@ -2423,7 +2443,8 @@ elif page == "📈 Visualización de datos":
                 stock_acum.columns = ["Día", "Stock"]
                 fig_stock = px.line(stock_acum, x="Día", y="Stock",
                                     color_discrete_sequence=[_TEAL])
-                fig_stock.update_traces(line_width=1.2)
+                fig_stock.update_traces(line_width=1.5, mode="lines+markers",
+                                        marker=dict(size=3, color=_TEAL))
                 fig_stock.add_hline(
                     y=stock_final_foto, line_dash="dash", line_color="#555555", line_width=1,
                     annotation_text=f"Foto final: {stock_final_foto:,.0f}",
@@ -2435,6 +2456,20 @@ elif page == "📈 Visualización de datos":
                         annotation_text=_fecha_hl, annotation_position="top left",
                         annotation_font_size=10,
                     )
+                    # Marcador naranja grande en el punto seleccionado
+                    try:
+                        _hl_date = pd.to_datetime(_fecha_hl).date()
+                        _hl_stock = stock_acum[stock_acum["Día"].astype(str).str[:10] == str(_hl_date)]
+                        if not _hl_stock.empty:
+                            import plotly.graph_objects as go
+                            fig_stock.add_trace(go.Scatter(
+                                x=_hl_stock["Día"], y=_hl_stock["Stock"],
+                                mode="markers",
+                                marker=dict(color="#ff7f0e", size=10, symbol="circle"),
+                                showlegend=False, hoverinfo="skip",
+                            ))
+                    except Exception:
+                        pass
                 fig_stock.update_layout(
                     showlegend=False, margin=dict(t=8, b=5, l=5, r=5), height=210,
                     plot_bgcolor="white", paper_bgcolor="white",
@@ -2450,20 +2485,26 @@ elif page == "📈 Visualización de datos":
 
             with _tc1:
                 st.markdown("**Neto diario (entradas − salidas)**")
-                _neto_d2 = _diario_f.groupby("Dia")["Cantidad"].sum() if not _diario_f.empty else pd.Series(dtype=float)
+                _neto_d2 = _diario_ts.groupby("Dia")["Cantidad"].sum() if not _diario_ts.empty else pd.Series(dtype=float)
                 if not _neto_d2.empty:
                     neto_dia = _neto_d2.reset_index()
                     neto_dia.columns = ["Día", "Neto"]
-                    neto_dia["Color"] = neto_dia["Neto"].apply(
-                        lambda v: "Ingreso" if v >= 0 else "Egreso"
-                    )
-                    fig_neto = px.bar(neto_dia, x="Día", y="Neto", color="Color",
-                                      color_discrete_map={"Ingreso": _TEAL, "Egreso": "#dc3545"})
-                    fig_neto.add_hline(y=0, line_dash="dash", line_color="#888888", line_width=1)
+                    # Barra del día seleccionado en naranja; resto en teal/rojo según signo
                     if _fecha_hl:
-                        fig_neto.add_vline(
-                            x=_fecha_hl, line_color="#ff7f0e", line_width=2, line_dash="dot",
+                        neto_dia["Color"] = neto_dia.apply(
+                            lambda r: "Seleccionado" if str(r["Día"])[:10] == _fecha_hl
+                            else ("Ingreso" if r["Neto"] >= 0 else "Egreso"),
+                            axis=1,
                         )
+                        _color_map = {"Ingreso": _TEAL, "Egreso": "#dc3545", "Seleccionado": "#ff7f0e"}
+                    else:
+                        neto_dia["Color"] = neto_dia["Neto"].apply(
+                            lambda v: "Ingreso" if v >= 0 else "Egreso"
+                        )
+                        _color_map = {"Ingreso": _TEAL, "Egreso": "#dc3545"}
+                    fig_neto = px.bar(neto_dia, x="Día", y="Neto", color="Color",
+                                      color_discrete_map=_color_map)
+                    fig_neto.add_hline(y=0, line_dash="dash", line_color="#888888", line_width=1)
                     fig_neto.update_layout(
                         showlegend=False, margin=dict(t=8, b=5, l=5, r=5), height=190,
                         plot_bgcolor="white", paper_bgcolor="white",
@@ -2476,8 +2517,8 @@ elif page == "📈 Visualización de datos":
                     )
 
                 st.markdown("**SKUs distintos movidos por día**")
-                if not _diario_f.empty:
-                    skus_dia = _diario_f.groupby("Dia")["CodigoArticulo"].nunique().reset_index()
+                if not _diario_ts.empty:
+                    skus_dia = _diario_ts.groupby("Dia")["CodigoArticulo"].nunique().reset_index()
                     skus_dia.columns = ["Día", "SKUs"]
                     _fig_skus = _ts_line(skus_dia, "Día", "SKUs", "", "SKUs")
                     if _fecha_hl:
@@ -2490,8 +2531,8 @@ elif page == "📈 Visualización de datos":
 
             with _tc2:
                 st.markdown("**Líneas por día**")
-                if not _diario_f.empty:
-                    trans_dia = _diario_f.groupby("Dia").size().reset_index()
+                if not _diario_ts.empty:
+                    trans_dia = _diario_ts.groupby("Dia").size().reset_index()
                     trans_dia.columns = ["Día", "Líneas"]
                     _fig_lineas = _ts_line(trans_dia, "Día", "Líneas", "", "Líneas")
                     if _fecha_hl:
@@ -2505,9 +2546,9 @@ elif page == "📈 Visualización de datos":
                 doc_col = "Documento"
                 if doc_col in _diario_base.columns and _diario_base[doc_col].replace("", pd.NA).notna().any():
                     st.markdown("**Facturas por día**")
-                    if not _diario_f.empty:
+                    if not _diario_ts.empty:
                         fact_dia = (
-                            _diario_f[_diario_f[doc_col].replace("", pd.NA).notna()]
+                            _diario_ts[_diario_ts[doc_col].replace("", pd.NA).notna()]
                             .groupby("Dia")[doc_col].nunique().reset_index()
                         )
                         fact_dia.columns = ["Día", "Facturas"]
