@@ -302,6 +302,25 @@ def read_uploaded_sheet(name, size, sheet_name, _file_bytes):
     return pd.read_excel(io.BytesIO(_file_bytes), sheet_name=sheet_name)
 
 
+# Queries a Supabase cacheadas 60 s: evita ir a la red en cada re-render
+# (cada click en un filtro de pills dispara un re-run completo).
+@st.cache_data(ttl=60, show_spinner=False)
+def _cached_list_clientes():
+    return cloud_store.list_clientes()
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _cached_list_corridas(cliente_id):
+    return cloud_store.list_corridas(cliente_id)
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_load_corrida_by_id(corrida_id):
+    return cloud_store.load_corrida_by_id(corrida_id)
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_get_cliente_nombre(cliente_id):
+    return cloud_store.get_cliente_nombre(cliente_id)
+
+
 def build_claude_context(data, report_name):
     resumen = data["resumen"].iloc[0].to_dict() if not data["resumen"].empty else {}
     control = data["control_stock"]
@@ -782,12 +801,12 @@ with st.sidebar:
         # ── Carga directa por link compartido ────────────────────────────────
         if _qp_corrida_id and cloud_on:
             try:
-                _corrida_link = cloud_store.load_corrida_by_id(_qp_corrida_id)
+                _corrida_link = _cached_load_corrida_by_id(_qp_corrida_id)
             except Exception:
                 _corrida_link = None
             if _corrida_link:
                 corrida = _corrida_link
-                cli_nombre = cloud_store.get_cliente_nombre(corrida.get("cliente_id", ""))
+                cli_nombre = _cached_get_cliente_nombre(corrida.get("cliente_id", ""))
                 cloud_include_initial = bool(
                     (corrida.get("parametros") or {}).get("include_initial_date_movements", False)
                 )
@@ -805,7 +824,7 @@ with st.sidebar:
         # ── Selector manual ──────────────────────────────────────────────────
         else:
             try:
-                clientes = cloud_store.list_clientes()
+                clientes = _cached_list_clientes()
             except Exception as exc:
                 clientes = []
                 st.warning(f"No se pudo leer la nube: {exc}")
@@ -813,7 +832,7 @@ with st.sidebar:
                 nombres = {c["nombre"]: c["id"] for c in clientes}
                 cli_sel = st.selectbox("Cliente", list(nombres.keys()))
                 try:
-                    corridas = cloud_store.list_corridas(nombres[cli_sel])
+                    corridas = _cached_list_corridas(nombres[cli_sel])
                 except Exception:
                     corridas = []
                 if corridas:
