@@ -2285,11 +2285,10 @@ elif page == "📈 Visualización de datos":
             fig.update_layout(**_layout)
             return fig
 
-        # ── Distribuciones (columna izquierda) ──────────────────────────────
-        col_dist, col_ts = st.columns([2, 3])
+        # ── Distribuciones (fila de 3 columnas) ─────────────────────────────
+        _cd1, _cd2, _cd3 = st.columns(3)
 
-        with col_dist:
-            # 1. Distribución de SKUs según diferencia absoluta
+        with _cd1:
             if "DiferenciaAbsoluta" in fin.columns:
                 dif_abs = pd.to_numeric(fin["DiferenciaAbsoluta"], errors="coerce").fillna(0)
                 bins_dif = [0, 1, 5, 20, 100, float("inf")]
@@ -2299,11 +2298,11 @@ elif page == "📈 Visualización de datos":
                 dist_dif.columns = ["Rango", "SKUs"]
                 st.plotly_chart(
                     _pct_bar(dist_dif, "Rango", "SKUs",
-                             "Distribución de SKUs según diferencia absoluta"),
+                             "SKUs por diferencia absoluta"),
                     use_container_width=True,
                 )
 
-            # 2. Distribución de movimientos por cantidad absoluta
+        with _cd2:
             if not mov_periodo.empty:
                 q_abs = mov_periodo["Cantidad"].abs()
                 bins_mov = [0, 1, 5, 10, 50, 100, float("inf")]
@@ -2313,20 +2312,16 @@ elif page == "📈 Visualización de datos":
                 dist_mov.columns = ["Rango", "Movimientos"]
                 st.plotly_chart(
                     _pct_bar(dist_mov, "Rango", "Movimientos",
-                             "Distribución de movimientos por cantidad"),
+                             "Movimientos por cantidad"),
                     use_container_width=True,
                 )
 
-            # 3. Distribución de SKUs por estado de control
+        with _cd3:
             if "EstadoControl" in fin.columns:
                 estado = fin["EstadoControl"].astype(str).str.strip()
                 dist_est = estado.value_counts().reset_index()
                 dist_est.columns = ["Estado", "SKUs"]
                 dist_est = dist_est.sort_values("SKUs", ascending=False)
-                COLOR_ESTADO = {"OK": "#28a745", "Diferencia": "#dc3545"}
-                dist_est["Color"] = dist_est["Estado"].map(
-                    lambda e: COLOR_ESTADO.get(e, _TEAL)
-                )
                 total_est = dist_est["SKUs"].sum()
                 dist_est["PctLabel"] = (dist_est["SKUs"] / total_est * 100).apply(
                     lambda v: f"{v:.0f}%"
@@ -2350,44 +2345,43 @@ elif page == "📈 Visualización de datos":
                 )
                 st.plotly_chart(fig_est, use_container_width=True)
 
-        # ── Series temporales (columna derecha) ─────────────────────────────
-        with col_ts:
-            if not mov_periodo.empty and "Fecha_dt" in mov_periodo.columns:
-                diario = mov_periodo.dropna(subset=["Fecha_dt"]).copy()
-                diario["Dia"] = diario["Fecha_dt"].dt.date
+        # ── Series temporales (2 columnas por fila) ──────────────────────────
+        if not mov_periodo.empty and "Fecha_dt" in mov_periodo.columns:
+            diario = mov_periodo.dropna(subset=["Fecha_dt"]).copy()
+            diario["Dia"] = diario["Fecha_dt"].dt.date
 
-                # 1. Evolución del stock diario
-                if pd.notna(fecha_inicial) and pd.notna(fecha_final):
-                    st.markdown("**Evolución del stock diario**")
-                    _d1 = _tipo_pills(diario, "pills_stock")
-                    _neto_d1 = _d1.groupby("Dia")["Cantidad"].sum()
-                    dias_rango = pd.date_range(
-                        fecha_inicial + pd.Timedelta(days=1), fecha_final, freq="D"
-                    )
-                    stock_d = pd.Series(0.0, index=[d.date() for d in dias_rango])
-                    stock_d.update(_neto_d1)
-                    stock_acum = (stock_inicial + stock_d.cumsum()).reset_index()
-                    stock_acum.columns = ["Día", "Stock"]
-                    fig_stock = px.line(
-                        stock_acum, x="Día", y="Stock",
-                        color_discrete_sequence=[_TEAL],
-                    )
-                    fig_stock.update_traces(line_width=1.2)
-                    fig_stock.add_hline(
-                        y=stock_final_foto, line_dash="dash", line_color="#555555", line_width=1,
-                        annotation_text=f"Foto final: {stock_final_foto:,.0f}",
-                        annotation_position="top right", annotation_font_size=10,
-                    )
-                    fig_stock.update_layout(
-                        showlegend=False, margin=dict(t=8, b=5, l=5, r=5),
-                        height=210,
-                        plot_bgcolor="white", paper_bgcolor="white",
-                        yaxis=dict(showgrid=True, gridcolor="#eeeeee", title="Unidades"),
-                        xaxis=dict(title="", showgrid=False),
-                    )
-                    st.plotly_chart(fig_stock, use_container_width=True)
+            # Stock diario — ancho completo (es la serie más importante)
+            if pd.notna(fecha_inicial) and pd.notna(fecha_final):
+                st.markdown("**Evolución del stock diario**")
+                _d1 = _tipo_pills(diario, "pills_stock")
+                _neto_d1 = _d1.groupby("Dia")["Cantidad"].sum()
+                dias_rango = pd.date_range(
+                    fecha_inicial + pd.Timedelta(days=1), fecha_final, freq="D"
+                )
+                stock_d = pd.Series(0.0, index=[d.date() for d in dias_rango])
+                stock_d.update(_neto_d1)
+                stock_acum = (stock_inicial + stock_d.cumsum()).reset_index()
+                stock_acum.columns = ["Día", "Stock"]
+                fig_stock = px.line(stock_acum, x="Día", y="Stock",
+                                    color_discrete_sequence=[_TEAL])
+                fig_stock.update_traces(line_width=1.2)
+                fig_stock.add_hline(
+                    y=stock_final_foto, line_dash="dash", line_color="#555555", line_width=1,
+                    annotation_text=f"Foto final: {stock_final_foto:,.0f}",
+                    annotation_position="top right", annotation_font_size=10,
+                )
+                fig_stock.update_layout(
+                    showlegend=False, margin=dict(t=8, b=5, l=5, r=5), height=210,
+                    plot_bgcolor="white", paper_bgcolor="white",
+                    yaxis=dict(showgrid=True, gridcolor="#eeeeee", title="Unidades"),
+                    xaxis=dict(title="", showgrid=False),
+                )
+                st.plotly_chart(fig_stock, use_container_width=True)
 
-                # 2. Neto diario (entradas − salidas), barras verde/rojo
+            # Resto de series: 2 por fila
+            _ts_col1, _ts_col2 = st.columns(2)
+
+            with _ts_col1:
                 st.markdown("**Neto diario (entradas − salidas)**")
                 _d2 = _tipo_pills(diario, "pills_neto")
                 _neto_d2 = _d2.groupby("Dia")["Cantidad"].sum()
@@ -2396,22 +2390,17 @@ elif page == "📈 Visualización de datos":
                 neto_dia["Color"] = neto_dia["Neto"].apply(
                     lambda v: "Ingreso" if v >= 0 else "Egreso"
                 )
-                fig_neto = px.bar(
-                    neto_dia, x="Día", y="Neto",
-                    color="Color",
-                    color_discrete_map={"Ingreso": _TEAL, "Egreso": "#dc3545"},
-                )
+                fig_neto = px.bar(neto_dia, x="Día", y="Neto", color="Color",
+                                  color_discrete_map={"Ingreso": _TEAL, "Egreso": "#dc3545"})
                 fig_neto.add_hline(y=0, line_dash="dash", line_color="#888888", line_width=1)
                 fig_neto.update_layout(
-                    showlegend=False, margin=dict(t=8, b=5, l=5, r=5),
-                    height=190,
+                    showlegend=False, margin=dict(t=8, b=5, l=5, r=5), height=190,
                     plot_bgcolor="white", paper_bgcolor="white",
                     yaxis=dict(showgrid=True, gridcolor="#eeeeee", title="Unidades"),
                     xaxis=dict(title="", showgrid=False),
                 )
                 st.plotly_chart(fig_neto, use_container_width=True)
 
-                # 3. SKUs distintos movidos por día
                 st.markdown("**SKUs distintos movidos por día**")
                 _d3 = _tipo_pills(diario, "pills_skus")
                 skus_dia = _d3.groupby("Dia")["CodigoArticulo"].nunique().reset_index()
@@ -2421,7 +2410,7 @@ elif page == "📈 Visualización de datos":
                     use_container_width=True,
                 )
 
-                # 4. Líneas por día
+            with _ts_col2:
                 st.markdown("**Líneas por día**")
                 _d4 = _tipo_pills(diario, "pills_lineas")
                 trans_dia = _d4.groupby("Dia").size().reset_index()
@@ -2431,7 +2420,6 @@ elif page == "📈 Visualización de datos":
                     use_container_width=True,
                 )
 
-                # 5. Facturas por día (documentos únicos)
                 doc_col = "Documento"
                 if doc_col in diario.columns and diario[doc_col].replace("", pd.NA).notna().any():
                     st.markdown("**Facturas por día**")
@@ -2445,8 +2433,8 @@ elif page == "📈 Visualización de datos":
                         _ts_line(fact_dia, "Día", "Facturas", "", "Facturas"),
                         use_container_width=True,
                     )
-            else:
-                st.info("Las series temporales requieren movimientos guardados. Volvé a ejecutar el análisis del cliente.")
+        else:
+            st.info("Las series temporales requieren movimientos guardados. Volvé a ejecutar el análisis del cliente.")
 
         # ── Tabla por Unidad de Gestión (Categoria) ───────────────────────────
         st.divider()
