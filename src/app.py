@@ -815,11 +815,20 @@ with st.sidebar:
                     cloud_archivo_control = corrida["archivo_control"]
                     fecha = str(corrida.get("creado_en", ""))[:16].replace("T", " ")
                     report_label = f"{cli_nombre} · {fecha}"
-                    st.success(f"Corrida cargada desde link compartido · {report_label}")
+                    col_msg, col_btn = st.columns([3, 1])
+                    with col_msg:
+                        st.success(f"Corrida cargada · {report_label}")
+                    with col_btn:
+                        if st.button("Cambiar corrida", use_container_width=True):
+                            st.query_params.clear()
+                            st.rerun()
                 except Exception as exc:
                     st.error(f"No se pudo cargar la corrida del link: {exc}")
             else:
                 st.warning("El link no corresponde a ninguna corrida existente.")
+                if st.button("Ir al selector"):
+                    st.query_params.clear()
+                    st.rerun()
 
         # ── Selector manual ──────────────────────────────────────────────────
         else:
