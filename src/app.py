@@ -2239,7 +2239,7 @@ elif page == "📈 Visualización de datos":
                 plot_bgcolor="white", paper_bgcolor="white",
                 yaxis=dict(showgrid=True, gridcolor="#eeeeee", title=y_label,
                            title_font_size=11, tickformat=",.0f"),
-                xaxis=dict(title="", showgrid=False),
+                xaxis=dict(title="", showgrid=False, type="category"),
                 clickmode="event+select",
             )
             if title:
@@ -2476,7 +2476,7 @@ elif page == "📈 Visualización de datos":
                     plot_bgcolor="white", paper_bgcolor="white",
                     yaxis=dict(showgrid=True, gridcolor="#eeeeee", title="Unidades",
                                tickformat=",.0f"),
-                    xaxis=dict(title="", showgrid=False),
+                    xaxis=dict(title="", showgrid=False, type="category"),
                     clickmode="event+select",
                 )
                 _ev_stock = st.plotly_chart(
@@ -2503,7 +2503,7 @@ elif page == "📈 Visualización de datos":
                         plot_bgcolor="white", paper_bgcolor="white",
                         yaxis=dict(showgrid=True, gridcolor="#eeeeee", title="Unidades",
                                    tickformat=",.0f"),
-                        xaxis=dict(title="", showgrid=False),
+                        xaxis=dict(title="", showgrid=False, type="category"),
                         clickmode="event+select",
                     )
                     _ev_neto = st.plotly_chart(
