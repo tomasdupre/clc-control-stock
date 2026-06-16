@@ -287,6 +287,25 @@ def prepare_viz_movimientos(cloud_archivo_control_param, report_path_str):
 
 
 @st.cache_data(show_spinner=False)
+def prepare_mov_periodo(cache_key, incluye_inicial, fecha_inicial, fecha_final, _mov):
+    """
+    Movimientos del periodo (entre foto inicial y final) cacheados por corrida.
+
+    PERFORMANCE: el recorte (mascara booleana + copy sobre cientos de miles de filas)
+    se rehacia en cada rerun del dashboard. La ventana depende solo de la corrida y
+    del flag de fecha inicial; `_mov` no se hashea (es grande). Logica identica.
+    """
+    if _mov is None or _mov.empty or "Fecha_dt" not in _mov.columns:
+        return pd.DataFrame(columns=["Cantidad", "Fecha_dt"])
+    if incluye_inicial:
+        desde_inicial = _mov["Fecha_dt"] >= fecha_inicial
+    else:
+        desde_inicial = _mov["Fecha_dt"] > fecha_inicial
+    en_periodo = desde_inicial & (_mov["Fecha_dt"] <= fecha_final)
+    return _mov[en_periodo].copy()
+
+
+@st.cache_data(show_spinner=False)
 def prepare_balance_control(cache_key, _control_full):
     """
     Fotos del balance de masa (inicial/final) calculadas una sola vez por corrida.
@@ -2084,17 +2103,13 @@ elif page == "📈 Visualización de datos":
             incluye_inicial = bool(
                 (local_run_metadata.get("parametros") or {}).get("include_initial_date_movements", False)
             )
-        if hay_mov:
-            if incluye_inicial:
-                desde_inicial = mov_f["Fecha_dt"] >= fecha_inicial
-            else:
-                desde_inicial = mov_f["Fecha_dt"] > fecha_inicial
-            en_periodo = desde_inicial & (mov_f["Fecha_dt"] <= fecha_final)
-            mov_periodo = mov_f[en_periodo].copy()
-            mov_netos = mov_periodo["Cantidad"].sum()
-        else:
-            mov_periodo = pd.DataFrame(columns=["Cantidad", "Fecha_dt"])
-            mov_netos = 0.0
+        # El recorte del período está cacheado por corrida (ver prepare_mov_periodo):
+        # antes la máscara + copy sobre todos los movimientos corría en cada rerun.
+        mov_periodo = prepare_mov_periodo(
+            _corrida_key, bool(incluye_inicial),
+            fecha_inicial, fecha_final, mov_f,
+        )
+        mov_netos = mov_periodo["Cantidad"].sum() if not mov_periodo.empty else 0.0
 
         # El stock calculado del balance arranca en la foto inicial y le suma el neto
         # de los movimientos; idealmente cierra en la foto final.
@@ -2325,8 +2340,13 @@ elif page == "📈 Visualización de datos":
                     st.rerun()
 
         # ── Helpers de filtrado ────────────────────────────────────────────────
+        # No se copia de entrada: el indexado booleano ya devuelve un frame nuevo y
+        # los consumidores solo hacen groupby/lectura (no mutan). Sin filtros activos
+        # se devuelve el dataframe tal cual (vista por defecto, sin copias).
         def _filtrar_diario(d, f_fin, filtros):
-            r = d.copy()
+            if not filtros:
+                return d
+            r = d
             if "fecha" in filtros:
                 try:
                     _fd = pd.to_datetime(filtros["fecha"]).date()
@@ -2343,7 +2363,9 @@ elif page == "📈 Visualización de datos":
             return r
 
         def _filtrar_fin(f, d, filtros):
-            r = f.copy()
+            if not filtros:
+                return f
+            r = f
             if "estado" in filtros:
                 r = r[r["EstadoControl"].astype(str).str.strip() == filtros["estado"]]
             if ("fecha" in filtros or "tipo" in filtros) and not d.empty and "CodigoArticulo" in d.columns:
@@ -2352,11 +2374,14 @@ elif page == "📈 Visualización de datos":
                 r = r[r["CodigoArticulo"].isin(_d_f["CodigoArticulo"].unique())]
             return r
 
-        # Preparar diario_base (movimientos del período con Dia)
+        # Preparar diario_base (movimientos del período con Dia). mov_periodo ya viene
+        # con la columna Dia desde prepare_viz_movimientos; dropna devuelve un frame
+        # nuevo, así que no hace falta copiar de nuevo.
         _diario_base = pd.DataFrame()
         if not mov_periodo.empty and "Fecha_dt" in mov_periodo.columns:
-            _diario_base = mov_periodo.dropna(subset=["Fecha_dt"]).copy()
-            _diario_base["Dia"] = _diario_base["Fecha_dt"].dt.date
+            _diario_base = mov_periodo.dropna(subset=["Fecha_dt"])
+            if "Dia" not in _diario_base.columns:
+                _diario_base = _diario_base.assign(Dia=_diario_base["Fecha_dt"].dt.date)
 
         # _diario_f: con TODOS los filtros (fecha+tipo+estado) → para distribuciones
         # _diario_ts: sin filtro de fecha → para series temporales (muestran período completo)
