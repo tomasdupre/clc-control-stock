@@ -11,6 +11,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
+import streamlit.components.v1 as components
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -403,6 +404,63 @@ def _cached_load_corrida_by_id(corrida_id):
 @st.cache_data(ttl=300, show_spinner=False)
 def _cached_get_cliente_nombre(cliente_id):
     return cloud_store.get_cliente_nombre(cliente_id)
+
+
+def preservar_scroll(key="clc_scroll"):
+    """
+    Mantiene la posición de scroll entre re-ejecuciones (cada click en un gráfico
+    re-ejecuta el script y, por defecto, Streamlit vuelve al tope de la página).
+
+    Guarda la posición en sessionStorage y la restaura tras cada rerun. Es solo UI;
+    no toca datos ni lógica. Detecta el contenedor scrolleable real de Streamlit.
+    """
+    components.html(
+        """
+        <script>
+        (function () {
+            const KEY = "%s";
+            const pwin = window.parent;
+            const pdoc = pwin.document;
+
+            function scroller() {
+                const cands = [
+                    pdoc.querySelector('section.main'),
+                    pdoc.querySelector('[data-testid="stMain"]'),
+                    pdoc.querySelector('[data-testid="stAppViewContainer"]'),
+                    pdoc.scrollingElement,
+                    pdoc.documentElement,
+                ];
+                for (const el of cands) {
+                    if (el && el.scrollHeight > el.clientHeight + 5) return el;
+                }
+                return pdoc.scrollingElement || pdoc.documentElement;
+            }
+
+            function restore(n) {
+                const el = scroller();
+                const saved = pwin.sessionStorage.getItem(KEY);
+                if (el && saved !== null) { el.scrollTop = parseFloat(saved); }
+                if (n < 6) { pwin.requestAnimationFrame(function () { restore(n + 1); }); }
+            }
+            restore(0);
+
+            if (!pwin.__clcScrollHooked) {
+                pwin.__clcScrollHooked = true;
+                let t = null;
+                pwin.addEventListener('scroll', function () {
+                    if (t) return;
+                    t = setTimeout(function () {
+                        const el = scroller();
+                        if (el) { pwin.sessionStorage.setItem(KEY, el.scrollTop); }
+                        t = null;
+                    }, 120);
+                }, true);
+            }
+        })();
+        </script>
+        """ % key,
+        height=0,
+    )
 
 
 def build_claude_context(data, report_name):
@@ -2050,6 +2108,8 @@ elif page == "🔍 Detalle":
 # ══════════════════════════════════════════════════════════════════════════════
 
 elif page == "📈 Visualización de datos":
+    # Mantener la posición de scroll al re-ejecutar (clicks en gráficos del dashboard).
+    preservar_scroll("clc_viz_scroll")
     st.title("📈 Visualización de datos")
     viz = st.selectbox("Visualización", ["Balance de Masa"])
 
