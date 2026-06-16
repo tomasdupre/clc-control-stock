@@ -2207,7 +2207,8 @@ elif page == "📈 Visualización de datos":
                         annotation_text=f"Foto final: {stock_final_foto:,.0f}",
                         annotation_position="bottom right",
                     )
-                    fig_m.update_layout(margin=dict(t=10, b=10), xaxis_title="", yaxis_title="Unidades")
+                    fig_m.update_layout(margin=dict(t=8, b=5, l=5, r=5), height=230,
+                                        xaxis_title="", yaxis_title="Unidades")
                     st.plotly_chart(fig_m, use_container_width=True)
                 with tab_tabla:
                     st.dataframe(
@@ -2233,11 +2234,14 @@ elif page == "📈 Visualización de datos":
                 title=f"<b>{title}</b>",
             )
             fig.update_traces(textposition="outside", marker_line_width=0)
+            _ymax = df_dist[y_col].max() if not df_dist.empty else 1
             fig.update_layout(
                 title=dict(font=dict(size=13, color="#0c4a6e"), x=0, xref="paper"),
-                showlegend=False, margin=dict(t=45, b=10, l=10, r=10),
+                showlegend=False, margin=dict(t=40, b=5, l=5, r=5),
+                height=210,
                 plot_bgcolor="white", paper_bgcolor="white",
-                yaxis=dict(showgrid=True, gridcolor="#eeeeee", title=""),
+                yaxis=dict(showgrid=True, gridcolor="#eeeeee", title="",
+                           range=[0, _ymax * 1.25]),
                 xaxis=dict(title=""),
             )
             return fig
@@ -2268,14 +2272,17 @@ elif page == "📈 Visualización de datos":
                 annotation_position="top right",
                 annotation_font_size=10,
             )
-            fig.update_layout(
-                title=dict(text=f"<b>{title}</b>", font_size=13, x=0.5),
-                showlegend=False, margin=dict(t=40, b=10, l=10, r=10),
+            _layout = dict(
+                showlegend=False, margin=dict(t=8, b=5, l=5, r=5),
+                height=190,
                 plot_bgcolor="white", paper_bgcolor="white",
                 yaxis=dict(showgrid=True, gridcolor="#eeeeee", title=y_label,
                            title_font_size=11),
                 xaxis=dict(title="", showgrid=False),
             )
+            if title:
+                _layout["title"] = dict(text=f"<b>{title}</b>", font_size=13, x=0.5)
+            fig.update_layout(**_layout)
             return fig
 
         # ── Distribuciones (columna izquierda) ──────────────────────────────
@@ -2331,11 +2338,14 @@ elif page == "📈 Visualización de datos":
                     title="<b>SKUs por estado de control</b>",
                 )
                 fig_est.update_traces(textposition="outside", marker_line_width=0)
+                _est_ymax = dist_est["SKUs"].max() if not dist_est.empty else 1
                 fig_est.update_layout(
                     title=dict(font=dict(size=13, color="#0c4a6e"), x=0, xref="paper"),
-                    showlegend=False, margin=dict(t=45, b=10, l=10, r=10),
+                    showlegend=False, margin=dict(t=40, b=5, l=5, r=5),
+                    height=210,
                     plot_bgcolor="white", paper_bgcolor="white",
-                    yaxis=dict(showgrid=True, gridcolor="#eeeeee", title=""),
+                    yaxis=dict(showgrid=True, gridcolor="#eeeeee", title="",
+                               range=[0, _est_ymax * 1.25]),
                     xaxis=dict(title=""),
                 )
                 st.plotly_chart(fig_est, use_container_width=True)
@@ -2369,7 +2379,8 @@ elif page == "📈 Visualización de datos":
                         annotation_position="top right", annotation_font_size=10,
                     )
                     fig_stock.update_layout(
-                        showlegend=False, margin=dict(t=10, b=10, l=10, r=10),
+                        showlegend=False, margin=dict(t=8, b=5, l=5, r=5),
+                        height=210,
                         plot_bgcolor="white", paper_bgcolor="white",
                         yaxis=dict(showgrid=True, gridcolor="#eeeeee", title="Unidades"),
                         xaxis=dict(title="", showgrid=False),
@@ -2392,7 +2403,8 @@ elif page == "📈 Visualización de datos":
                 )
                 fig_neto.add_hline(y=0, line_dash="dash", line_color="#888888", line_width=1)
                 fig_neto.update_layout(
-                    showlegend=False, margin=dict(t=10, b=10, l=10, r=10),
+                    showlegend=False, margin=dict(t=8, b=5, l=5, r=5),
+                    height=190,
                     plot_bgcolor="white", paper_bgcolor="white",
                     yaxis=dict(showgrid=True, gridcolor="#eeeeee", title="Unidades"),
                     xaxis=dict(title="", showgrid=False),
