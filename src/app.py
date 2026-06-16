@@ -2213,6 +2213,7 @@ elif page == "📈 Visualización de datos":
                 yaxis=dict(showgrid=True, gridcolor="#eeeeee", title="",
                            range=[0, _ymax * 1.25]),
                 xaxis=dict(title=""),
+                clickmode="event+select",
             )
             return fig
 
@@ -2234,6 +2235,7 @@ elif page == "📈 Visualización de datos":
                 yaxis=dict(showgrid=True, gridcolor="#eeeeee", title=y_label,
                            title_font_size=11),
                 xaxis=dict(title="", showgrid=False),
+                clickmode="event+select",
             )
             if title:
                 _layout["title"] = dict(text=f"<b>{title}</b>", font_size=13, x=0.5)
@@ -2358,6 +2360,7 @@ elif page == "📈 Visualización de datos":
                     yaxis=dict(showgrid=True, gridcolor="#eeeeee", title="",
                                range=[0, _est_ymax * 1.25]),
                     xaxis=dict(title=""),
+                    clickmode="event+select",
                 )
                 ev_dist_est = st.plotly_chart(
                     fig_est, on_select="rerun", key="ch_dist_est", use_container_width=True,
@@ -2393,6 +2396,7 @@ elif page == "📈 Visualización de datos":
                     plot_bgcolor="white", paper_bgcolor="white",
                     yaxis=dict(showgrid=False, title=""),
                     xaxis=dict(showgrid=True, gridcolor="#eeeeee", title=""),
+                    clickmode="event+select",
                 )
                 ev_dist_tipo = st.plotly_chart(
                     fig_tipo, on_select="rerun", key="ch_dist_tipo", use_container_width=True,
@@ -2436,6 +2440,7 @@ elif page == "📈 Visualización de datos":
                     plot_bgcolor="white", paper_bgcolor="white",
                     yaxis=dict(showgrid=True, gridcolor="#eeeeee", title="Unidades"),
                     xaxis=dict(title="", showgrid=False),
+                    clickmode="event+select",
                 )
                 _ev_stock = st.plotly_chart(
                     fig_stock, on_select="rerun", key="ch_stock", use_container_width=True,
@@ -2464,6 +2469,7 @@ elif page == "📈 Visualización de datos":
                         plot_bgcolor="white", paper_bgcolor="white",
                         yaxis=dict(showgrid=True, gridcolor="#eeeeee", title="Unidades"),
                         xaxis=dict(title="", showgrid=False),
+                        clickmode="event+select",
                     )
                     _ev_neto = st.plotly_chart(
                         fig_neto, on_select="rerun", key="ch_neto", use_container_width=True,
