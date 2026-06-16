@@ -1631,7 +1631,9 @@ if page == "⚙️ Procesar":
                 st.cache_data.clear()
                 analysis_ok = True
             except Exception as e:
+                import traceback as _tb
                 st.error(f"Error en el análisis: {e}")
+                st.code(_tb.format_exc(), language="python")
 
             if analysis_ok:
                 st.rerun()

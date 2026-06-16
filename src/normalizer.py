@@ -176,6 +176,12 @@ def normalize_movements(df, mapping, rules_path):
     normalized["Fecha"] = parse_date_series(normalized["Fecha"])
     normalized["CodigoArticulo"] = normalized["CodigoArticulo"].apply(normalize_code)
     normalized["CantidadOriginal"] = pd.to_numeric(normalized["CantidadOriginal"], errors="coerce")
+    # Documento siempre como string: puede venir como número de Excel (float) u object
+    if "Documento" in normalized.columns:
+        normalized["Documento"] = (
+            normalized["Documento"]
+            .apply(lambda v: "" if pd.isna(v) else (str(int(v)) if isinstance(v, float) and v == int(v) else str(v)))
+        )
     normalized = apply_movement_rules(normalized, rules_path)
     # Salida: lo mapeado + columnas derivadas (cantidad normalizada y advertencias).
     salida = MOVEMENT_COLUMNS + ["CantidadNormalizada", "Clasificacion_CLC", "AdvertenciaMovimiento"]
