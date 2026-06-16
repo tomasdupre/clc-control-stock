@@ -2308,9 +2308,34 @@ elif page == "📈 Visualización de datos":
                 base["tickformat"] = "%b %Y"
             return base
 
+        def _int_yaxis(yvals, title="", title_font_size=None, include_zero=False):
+            """
+            Eje Y de enteros sin etiquetas repetidas.
+
+            Cuando el rango de valores es muy chico (típicamente al seleccionar un solo
+            día), Plotly coloca ticks fraccionarios (509.5, 510, 510.5…) que con formato
+            entero se redondean al mismo número y se ven duplicados. Forzamos dtick=1 en
+            ese caso. Con rangos grandes se deja el auto de Plotly.
+            """
+            cfg = dict(showgrid=True, gridcolor="#eeeeee", title=title, tickformat=",.0f")
+            if title_font_size:
+                cfg["title_font_size"] = title_font_size
+            try:
+                v = pd.to_numeric(pd.Series(list(yvals)), errors="coerce").dropna()
+                if include_zero:
+                    v = pd.concat([v, pd.Series([0.0])], ignore_index=True)
+                if len(v):
+                    span = float(v.max() - v.min())
+                    if span < 6:
+                        cfg["dtick"] = 1
+            except Exception:
+                pass
+            return cfg
+
         def _ts_line(df_ts, x_col, y_col, title, y_label=""):
             """Serie temporal con marcadores clickeables y línea de promedio punteada."""
             df_ts = df_ts.copy()
+            _yaxis = _int_yaxis(df_ts[y_col], title=y_label, title_font_size=11)
             _xaxis = _date_xaxis(df_ts, x_col)
             avg = df_ts[y_col].mean() if not df_ts.empty else 0
             fig = px.line(df_ts, x=x_col, y=y_col, color_discrete_sequence=[_TEAL])
@@ -2326,8 +2351,7 @@ elif page == "📈 Visualización de datos":
                 showlegend=False, margin=dict(t=8, b=5, l=5, r=5),
                 height=190,
                 plot_bgcolor="white", paper_bgcolor="white",
-                yaxis=dict(showgrid=True, gridcolor="#eeeeee", title=y_label,
-                           title_font_size=11, tickformat=",.0f"),
+                yaxis=_yaxis,
                 xaxis=_xaxis,
                 clickmode="event+select",
             )
@@ -2572,8 +2596,7 @@ elif page == "📈 Visualización de datos":
                 fig_stock.update_layout(
                     showlegend=False, margin=dict(t=8, b=5, l=5, r=5), height=210,
                     plot_bgcolor="white", paper_bgcolor="white",
-                    yaxis=dict(showgrid=True, gridcolor="#eeeeee", title="Unidades",
-                               tickformat=",.0f"),
+                    yaxis=_int_yaxis(stock_show["Stock"], title="Unidades"),
                     xaxis=_xaxis_stock,
                     clickmode="event+select",
                 )
@@ -2599,8 +2622,7 @@ elif page == "📈 Visualización de datos":
                     fig_neto.update_layout(
                         showlegend=False, margin=dict(t=8, b=5, l=5, r=5), height=190,
                         plot_bgcolor="white", paper_bgcolor="white",
-                        yaxis=dict(showgrid=True, gridcolor="#eeeeee", title="Unidades",
-                                   tickformat=",.0f"),
+                        yaxis=_int_yaxis(neto_dia["Neto"], title="Unidades", include_zero=True),
                         xaxis=_xaxis_neto,
                         clickmode="event+select",
                     )
