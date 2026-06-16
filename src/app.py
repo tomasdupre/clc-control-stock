@@ -2219,6 +2219,10 @@ elif page == "📈 Visualización de datos":
 
         def _ts_line(df_ts, x_col, y_col, title, y_label=""):
             """Serie temporal con marcadores clickeables y línea de promedio punteada."""
+            df_ts = df_ts.copy()
+            # Convertir fechas a string para que el eje X muestre solo la fecha
+            # sin que Plotly interpole timestamps cuando hay un único punto.
+            df_ts[x_col] = df_ts[x_col].astype(str)
             avg = df_ts[y_col].mean() if not df_ts.empty else 0
             fig = px.line(df_ts, x=x_col, y=y_col, color_discrete_sequence=[_TEAL])
             fig.update_traces(line_width=1.5, mode="lines+markers",
@@ -2234,7 +2238,7 @@ elif page == "📈 Visualización de datos":
                 height=190,
                 plot_bgcolor="white", paper_bgcolor="white",
                 yaxis=dict(showgrid=True, gridcolor="#eeeeee", title=y_label,
-                           title_font_size=11),
+                           title_font_size=11, tickformat=",.0f"),
                 xaxis=dict(title="", showgrid=False),
                 clickmode="event+select",
             )
@@ -2454,6 +2458,9 @@ elif page == "📈 Visualización de datos":
                     stock_show = stock_acum
                     _s_mode = "lines+markers"
                     _s_msize = 3
+                # Convertir a string para evitar escala de timestamps en Plotly
+                stock_show = stock_show.copy()
+                stock_show["Día"] = stock_show["Día"].astype(str)
                 fig_stock = px.line(stock_show, x="Día", y="Stock",
                                     color_discrete_sequence=[_TEAL])
                 fig_stock.update_traces(line_width=1.5, mode=_s_mode,
@@ -2467,7 +2474,8 @@ elif page == "📈 Visualización de datos":
                 fig_stock.update_layout(
                     showlegend=False, margin=dict(t=8, b=5, l=5, r=5), height=210,
                     plot_bgcolor="white", paper_bgcolor="white",
-                    yaxis=dict(showgrid=True, gridcolor="#eeeeee", title="Unidades"),
+                    yaxis=dict(showgrid=True, gridcolor="#eeeeee", title="Unidades",
+                               tickformat=",.0f"),
                     xaxis=dict(title="", showgrid=False),
                     clickmode="event+select",
                 )
@@ -2483,6 +2491,7 @@ elif page == "📈 Visualización de datos":
                 if not _neto_d2.empty:
                     neto_dia = _neto_d2.reset_index()
                     neto_dia.columns = ["Día", "Neto"]
+                    neto_dia["Día"] = neto_dia["Día"].astype(str)
                     neto_dia["Color"] = neto_dia["Neto"].apply(
                         lambda v: "Ingreso" if v >= 0 else "Egreso"
                     )
@@ -2492,7 +2501,8 @@ elif page == "📈 Visualización de datos":
                     fig_neto.update_layout(
                         showlegend=False, margin=dict(t=8, b=5, l=5, r=5), height=190,
                         plot_bgcolor="white", paper_bgcolor="white",
-                        yaxis=dict(showgrid=True, gridcolor="#eeeeee", title="Unidades"),
+                        yaxis=dict(showgrid=True, gridcolor="#eeeeee", title="Unidades",
+                                   tickformat=",.0f"),
                         xaxis=dict(title="", showgrid=False),
                         clickmode="event+select",
                     )
