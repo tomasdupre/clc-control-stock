@@ -2216,21 +2216,6 @@ elif page == "📈 Visualización de datos":
             )
             return fig
 
-        def _tipo_pills(diario_df, key):
-            """Devuelve diario filtrado según la selección de pills de tipo de movimiento."""
-            _tipos = sorted(diario_df["Tipo"].dropna().unique().tolist())
-            if not _tipos:
-                return diario_df
-            _opts = ["Total"] + _tipos
-            _sel = st.pills(
-                "Tipo de movimiento", _opts,
-                selection_mode="multi", default=["Total"],
-                key=key, label_visibility="collapsed",
-            )
-            if not _sel or "Total" in _sel:
-                return diario_df
-            return diario_df[diario_df["Tipo"].isin(_sel)]
-
         def _ts_line(df_ts, x_col, y_col, title, y_label=""):
             """Serie temporal con línea de promedio punteada, estilo teal."""
             avg = df_ts[y_col].mean() if not df_ts.empty else 0
@@ -2255,76 +2240,176 @@ elif page == "📈 Visualización de datos":
             fig.update_layout(**_layout)
             return fig
 
-        # ── Distribuciones (fila de 3 columnas) ─────────────────────────────
-        _cd1, _cd2, _cd3 = st.columns(3)
+        # ── Cross-filter: estado por corrida ──────────────────────────────────
+        # Si el usuario cambia de corrida, los filtros se reinician automáticamente.
+        _viz_scope = cloud_archivo_control or "local"
+        if st.session_state.get("_viz_scope") != _viz_scope:
+            st.session_state.pop("viz_filtros", None)
+            st.session_state["_viz_scope"] = _viz_scope
+        _filtros = st.session_state.setdefault("viz_filtros", {})
+
+        # ── Barra de filtros activos ──────────────────────────────────────────
+        _LABEL_K = {"fecha": "Día", "tipo": "Tipo", "estado": "Estado"}
+        if _filtros:
+            _bar_c = st.columns([5, 1])
+            with _bar_c[0]:
+                _parts = [f"**{_LABEL_K.get(k, k)}:** `{v}`" for k, v in _filtros.items()]
+                st.markdown("🔍 " + "  ·  ".join(_parts))
+            with _bar_c[1]:
+                if st.button("✕ Limpiar filtros", use_container_width=True, key="viz_clear_all"):
+                    st.session_state.viz_filtros.clear()
+                    st.rerun()
+
+        # ── Helpers de filtrado ────────────────────────────────────────────────
+        def _filtrar_diario(d, f_fin, filtros):
+            r = d.copy()
+            if "fecha" in filtros:
+                try:
+                    _fd = pd.to_datetime(filtros["fecha"]).date()
+                    r = r[r["Dia"] == _fd]
+                except Exception:
+                    pass
+            if "tipo" in filtros:
+                r = r[r["Tipo"] == filtros["tipo"]]
+            if "estado" in filtros and not f_fin.empty and "CodigoArticulo" in f_fin.columns:
+                _skus = f_fin[
+                    f_fin["EstadoControl"].astype(str).str.strip() == filtros["estado"]
+                ]["CodigoArticulo"].unique()
+                r = r[r["CodigoArticulo"].isin(_skus)]
+            return r
+
+        def _filtrar_fin(f, d, filtros):
+            r = f.copy()
+            if "estado" in filtros:
+                r = r[r["EstadoControl"].astype(str).str.strip() == filtros["estado"]]
+            if ("fecha" in filtros or "tipo" in filtros) and not d.empty and "CodigoArticulo" in d.columns:
+                _otros = {k: v for k, v in filtros.items() if k != "estado"}
+                _d_f = _filtrar_diario(d, f, _otros)
+                r = r[r["CodigoArticulo"].isin(_d_f["CodigoArticulo"].unique())]
+            return r
+
+        # Preparar diario_base (movimientos del período con Dia)
+        _diario_base = pd.DataFrame()
+        if not mov_periodo.empty and "Fecha_dt" in mov_periodo.columns:
+            _diario_base = mov_periodo.dropna(subset=["Fecha_dt"]).copy()
+            _diario_base["Dia"] = _diario_base["Fecha_dt"].dt.date
+
+        _diario_f = _filtrar_diario(_diario_base, fin, _filtros) if not _diario_base.empty else pd.DataFrame()
+        _fin_f = _filtrar_fin(fin, _diario_base, _filtros)
+        _fecha_hl = _filtros.get("fecha")
+
+        # ── Distribuciones (fila de 4 columnas) ──────────────────────────────
+        _cd1, _cd2, _cd3, _cd4 = st.columns(4)
 
         with _cd1:
+            ev_dist_dif = None
             if "DiferenciaAbsoluta" in fin.columns:
-                dif_abs = pd.to_numeric(fin["DiferenciaAbsoluta"], errors="coerce").fillna(0)
+                dif_abs = pd.to_numeric(_fin_f["DiferenciaAbsoluta"], errors="coerce").fillna(0)
                 bins_dif = [0, 1, 5, 20, 100, float("inf")]
                 labels_dif = ["Sin dif.", "1-5", "5-20", "20-100", "100+"]
                 cats = pd.cut(dif_abs, bins=bins_dif, labels=labels_dif, right=False)
                 dist_dif = cats.value_counts().reindex(labels_dif, fill_value=0).reset_index()
                 dist_dif.columns = ["Rango", "SKUs"]
-                st.plotly_chart(
-                    _pct_bar(dist_dif, "Rango", "SKUs",
-                             "SKUs por diferencia absoluta"),
-                    use_container_width=True,
+                ev_dist_dif = st.plotly_chart(
+                    _pct_bar(dist_dif, "Rango", "SKUs", "SKUs por diferencia absoluta"),
+                    on_select="rerun", key="ch_dist_dif", use_container_width=True,
                 )
 
         with _cd2:
-            if not mov_periodo.empty:
-                q_abs = mov_periodo["Cantidad"].abs()
+            ev_dist_mov = None
+            if not _diario_f.empty:
+                q_abs = _diario_f["Cantidad"].abs()
                 bins_mov = [0, 1, 5, 10, 50, 100, float("inf")]
                 labels_mov = ["0-1", "1-5", "5-10", "10-50", "50-100", "100+"]
                 cats_mov = pd.cut(q_abs, bins=bins_mov, labels=labels_mov, right=False)
                 dist_mov = cats_mov.value_counts().reindex(labels_mov, fill_value=0).reset_index()
                 dist_mov.columns = ["Rango", "Movimientos"]
-                st.plotly_chart(
-                    _pct_bar(dist_mov, "Rango", "Movimientos",
-                             "Movimientos por cantidad"),
-                    use_container_width=True,
+                ev_dist_mov = st.plotly_chart(
+                    _pct_bar(dist_mov, "Rango", "Movimientos", "Movimientos por cantidad"),
+                    on_select="rerun", key="ch_dist_mov", use_container_width=True,
                 )
 
         with _cd3:
+            ev_dist_est = None
             if "EstadoControl" in fin.columns:
-                estado = fin["EstadoControl"].astype(str).str.strip()
-                dist_est = estado.value_counts().reset_index()
+                dist_est = fin["EstadoControl"].astype(str).str.strip().value_counts().reset_index()
                 dist_est.columns = ["Estado", "SKUs"]
                 dist_est = dist_est.sort_values("SKUs", ascending=False)
                 total_est = dist_est["SKUs"].sum()
                 dist_est["PctLabel"] = (dist_est["SKUs"] / total_est * 100).apply(
                     lambda v: f"{v:.0f}%"
                 )
+                _est_sel = _filtros.get("estado")
+                _est_cmap = {
+                    "OK": "#28a745" if (_est_sel is None or _est_sel == "OK") else "#cccccc",
+                    "Diferencia": "#dc3545" if (_est_sel is None or _est_sel == "Diferencia") else "#cccccc",
+                }
                 fig_est = px.bar(
                     dist_est, x="Estado", y="SKUs", text="PctLabel",
-                    color="Estado",
-                    color_discrete_map={"OK": "#28a745", "Diferencia": "#dc3545"},
+                    color="Estado", color_discrete_map=_est_cmap,
                     title="<b>SKUs por estado de control</b>",
                 )
                 fig_est.update_traces(textposition="outside", marker_line_width=0)
                 _est_ymax = dist_est["SKUs"].max() if not dist_est.empty else 1
                 fig_est.update_layout(
                     title=dict(font=dict(size=13, color="#0c4a6e"), x=0, xref="paper"),
-                    showlegend=False, margin=dict(t=40, b=5, l=5, r=5),
-                    height=210,
+                    showlegend=False, margin=dict(t=40, b=5, l=5, r=5), height=210,
                     plot_bgcolor="white", paper_bgcolor="white",
                     yaxis=dict(showgrid=True, gridcolor="#eeeeee", title="",
                                range=[0, _est_ymax * 1.25]),
                     xaxis=dict(title=""),
                 )
-                st.plotly_chart(fig_est, use_container_width=True)
+                ev_dist_est = st.plotly_chart(
+                    fig_est, on_select="rerun", key="ch_dist_est", use_container_width=True,
+                )
 
-        # ── Series temporales (2 columnas por fila) ──────────────────────────
-        if not mov_periodo.empty and "Fecha_dt" in mov_periodo.columns:
-            diario = mov_periodo.dropna(subset=["Fecha_dt"]).copy()
-            diario["Dia"] = diario["Fecha_dt"].dt.date
+        with _cd4:
+            ev_dist_tipo = None
+            if not _diario_base.empty and "Tipo" in _diario_base.columns:
+                tipo_counts = (
+                    _diario_base.groupby("Tipo").size().reset_index(name="Movimientos")
+                    .sort_values("Movimientos", ascending=True)
+                )
+                _tipo_sel = _filtros.get("tipo")
+                _tipo_colors = [
+                    _TEAL if (_tipo_sel is None or t == _tipo_sel) else "#cccccc"
+                    for t in tipo_counts["Tipo"]
+                ]
+                _total_tipo = tipo_counts["Movimientos"].sum()
+                tipo_counts["PctLabel"] = (tipo_counts["Movimientos"] / _total_tipo * 100).apply(
+                    lambda v: f"{v:.0f}%"
+                )
+                fig_tipo = px.bar(
+                    tipo_counts, x="Movimientos", y="Tipo", orientation="h",
+                    text="PctLabel", title="<b>Movimientos por tipo</b>",
+                    color_discrete_sequence=[_TEAL],
+                )
+                fig_tipo.update_traces(
+                    textposition="outside", marker_color=_tipo_colors, marker_line_width=0,
+                )
+                fig_tipo.update_layout(
+                    title=dict(font=dict(size=13, color="#0c4a6e"), x=0, xref="paper"),
+                    showlegend=False, margin=dict(t=40, b=5, l=5, r=5), height=210,
+                    plot_bgcolor="white", paper_bgcolor="white",
+                    yaxis=dict(showgrid=False, title=""),
+                    xaxis=dict(showgrid=True, gridcolor="#eeeeee", title=""),
+                )
+                ev_dist_tipo = st.plotly_chart(
+                    fig_tipo, on_select="rerun", key="ch_dist_tipo", use_container_width=True,
+                )
 
-            # Stock diario — ancho completo (es la serie más importante)
+        # ── Series temporales ─────────────────────────────────────────────────
+        _ev_stock = _ev_neto = _ev_skus = _ev_lineas = _ev_fact = None
+        if not _diario_base.empty:
+            # Stock diario: muestra la curva completa con tipo/estado filtrados
+            # pero SIN el filtro de fecha, para mantener el contexto visual.
+            # Se agrega una línea vertical naranja en la fecha seleccionada.
             if pd.notna(fecha_inicial) and pd.notna(fecha_final):
                 st.markdown("**Evolución del stock diario**")
-                _d1 = _tipo_pills(diario, "pills_stock")
-                _neto_d1 = _d1.groupby("Dia")["Cantidad"].sum()
+                _d1_ts = _filtrar_diario(
+                    _diario_base, fin, {k: v for k, v in _filtros.items() if k != "fecha"}
+                )
+                _neto_d1 = _d1_ts.groupby("Dia")["Cantidad"].sum()
                 dias_rango = pd.date_range(
                     fecha_inicial + pd.Timedelta(days=1), fecha_final, freq="D"
                 )
@@ -2340,71 +2425,146 @@ elif page == "📈 Visualización de datos":
                     annotation_text=f"Foto final: {stock_final_foto:,.0f}",
                     annotation_position="top right", annotation_font_size=10,
                 )
+                if _fecha_hl:
+                    fig_stock.add_vline(
+                        x=_fecha_hl, line_color="#ff7f0e", line_width=2,
+                        annotation_text=_fecha_hl, annotation_position="top left",
+                        annotation_font_size=10,
+                    )
                 fig_stock.update_layout(
                     showlegend=False, margin=dict(t=8, b=5, l=5, r=5), height=210,
                     plot_bgcolor="white", paper_bgcolor="white",
                     yaxis=dict(showgrid=True, gridcolor="#eeeeee", title="Unidades"),
                     xaxis=dict(title="", showgrid=False),
                 )
-                st.plotly_chart(fig_stock, use_container_width=True)
+                _ev_stock = st.plotly_chart(
+                    fig_stock, on_select="rerun", key="ch_stock", use_container_width=True,
+                )
 
-            # Resto de series: 2 por fila
-            _ts_col1, _ts_col2 = st.columns(2)
+            _tc1, _tc2 = st.columns(2)
 
-            with _ts_col1:
+            with _tc1:
                 st.markdown("**Neto diario (entradas − salidas)**")
-                _d2 = _tipo_pills(diario, "pills_neto")
-                _neto_d2 = _d2.groupby("Dia")["Cantidad"].sum()
-                neto_dia = _neto_d2.reset_index()
-                neto_dia.columns = ["Día", "Neto"]
-                neto_dia["Color"] = neto_dia["Neto"].apply(
-                    lambda v: "Ingreso" if v >= 0 else "Egreso"
-                )
-                fig_neto = px.bar(neto_dia, x="Día", y="Neto", color="Color",
-                                  color_discrete_map={"Ingreso": _TEAL, "Egreso": "#dc3545"})
-                fig_neto.add_hline(y=0, line_dash="dash", line_color="#888888", line_width=1)
-                fig_neto.update_layout(
-                    showlegend=False, margin=dict(t=8, b=5, l=5, r=5), height=190,
-                    plot_bgcolor="white", paper_bgcolor="white",
-                    yaxis=dict(showgrid=True, gridcolor="#eeeeee", title="Unidades"),
-                    xaxis=dict(title="", showgrid=False),
-                )
-                st.plotly_chart(fig_neto, use_container_width=True)
+                _neto_d2 = _diario_f.groupby("Dia")["Cantidad"].sum() if not _diario_f.empty else pd.Series(dtype=float)
+                if not _neto_d2.empty:
+                    neto_dia = _neto_d2.reset_index()
+                    neto_dia.columns = ["Día", "Neto"]
+                    neto_dia["Color"] = neto_dia["Neto"].apply(
+                        lambda v: "Ingreso" if v >= 0 else "Egreso"
+                    )
+                    fig_neto = px.bar(neto_dia, x="Día", y="Neto", color="Color",
+                                      color_discrete_map={"Ingreso": _TEAL, "Egreso": "#dc3545"})
+                    fig_neto.add_hline(y=0, line_dash="dash", line_color="#888888", line_width=1)
+                    if _fecha_hl:
+                        fig_neto.add_vline(
+                            x=_fecha_hl, line_color="#ff7f0e", line_width=2, line_dash="dot",
+                        )
+                    fig_neto.update_layout(
+                        showlegend=False, margin=dict(t=8, b=5, l=5, r=5), height=190,
+                        plot_bgcolor="white", paper_bgcolor="white",
+                        yaxis=dict(showgrid=True, gridcolor="#eeeeee", title="Unidades"),
+                        xaxis=dict(title="", showgrid=False),
+                    )
+                    _ev_neto = st.plotly_chart(
+                        fig_neto, on_select="rerun", key="ch_neto", use_container_width=True,
+                    )
 
                 st.markdown("**SKUs distintos movidos por día**")
-                _d3 = _tipo_pills(diario, "pills_skus")
-                skus_dia = _d3.groupby("Dia")["CodigoArticulo"].nunique().reset_index()
-                skus_dia.columns = ["Día", "SKUs"]
-                st.plotly_chart(
-                    _ts_line(skus_dia, "Día", "SKUs", "", "SKUs"),
-                    use_container_width=True,
-                )
+                if not _diario_f.empty:
+                    skus_dia = _diario_f.groupby("Dia")["CodigoArticulo"].nunique().reset_index()
+                    skus_dia.columns = ["Día", "SKUs"]
+                    _fig_skus = _ts_line(skus_dia, "Día", "SKUs", "", "SKUs")
+                    if _fecha_hl:
+                        _fig_skus.add_vline(
+                            x=_fecha_hl, line_color="#ff7f0e", line_width=2, line_dash="dot",
+                        )
+                    _ev_skus = st.plotly_chart(
+                        _fig_skus, on_select="rerun", key="ch_skus", use_container_width=True,
+                    )
 
-            with _ts_col2:
+            with _tc2:
                 st.markdown("**Líneas por día**")
-                _d4 = _tipo_pills(diario, "pills_lineas")
-                trans_dia = _d4.groupby("Dia").size().reset_index()
-                trans_dia.columns = ["Día", "Líneas"]
-                st.plotly_chart(
-                    _ts_line(trans_dia, "Día", "Líneas", "", "Líneas"),
-                    use_container_width=True,
-                )
+                if not _diario_f.empty:
+                    trans_dia = _diario_f.groupby("Dia").size().reset_index()
+                    trans_dia.columns = ["Día", "Líneas"]
+                    _fig_lineas = _ts_line(trans_dia, "Día", "Líneas", "", "Líneas")
+                    if _fecha_hl:
+                        _fig_lineas.add_vline(
+                            x=_fecha_hl, line_color="#ff7f0e", line_width=2, line_dash="dot",
+                        )
+                    _ev_lineas = st.plotly_chart(
+                        _fig_lineas, on_select="rerun", key="ch_lineas", use_container_width=True,
+                    )
 
                 doc_col = "Documento"
-                if doc_col in diario.columns and diario[doc_col].replace("", pd.NA).notna().any():
+                if doc_col in _diario_base.columns and _diario_base[doc_col].replace("", pd.NA).notna().any():
                     st.markdown("**Facturas por día**")
-                    _d5 = _tipo_pills(diario, "pills_facturas")
-                    fact_dia = (
-                        _d5[_d5[doc_col].replace("", pd.NA).notna()]
-                           .groupby("Dia")[doc_col].nunique().reset_index()
-                    )
-                    fact_dia.columns = ["Día", "Facturas"]
-                    st.plotly_chart(
-                        _ts_line(fact_dia, "Día", "Facturas", "", "Facturas"),
-                        use_container_width=True,
-                    )
+                    if not _diario_f.empty:
+                        fact_dia = (
+                            _diario_f[_diario_f[doc_col].replace("", pd.NA).notna()]
+                            .groupby("Dia")[doc_col].nunique().reset_index()
+                        )
+                        fact_dia.columns = ["Día", "Facturas"]
+                        if not fact_dia.empty:
+                            _fig_fact = _ts_line(fact_dia, "Día", "Facturas", "", "Facturas")
+                            if _fecha_hl:
+                                _fig_fact.add_vline(
+                                    x=_fecha_hl, line_color="#ff7f0e", line_width=2, line_dash="dot",
+                                )
+                            _ev_fact = st.plotly_chart(
+                                _fig_fact, on_select="rerun", key="ch_fact", use_container_width=True,
+                            )
         else:
             st.info("Las series temporales requieren movimientos guardados. Volvé a ejecutar el análisis del cliente.")
+
+        # ── Procesar eventos de click (cross-filter) ──────────────────────────
+        _new_filtros = dict(_filtros)
+        _changed = False
+
+        # Fecha: click en cualquier serie temporal (x = fecha)
+        for _ev_ts in [_ev_stock, _ev_neto, _ev_skus, _ev_lineas, _ev_fact]:
+            if (
+                _ev_ts is not None
+                and hasattr(_ev_ts, "selection")
+                and _ev_ts.selection
+                and _ev_ts.selection.get("points")
+            ):
+                _clicked_x = str(_ev_ts.selection["points"][0].get("x", ""))[:10]
+                if _clicked_x:
+                    if _new_filtros.get("fecha") == _clicked_x:
+                        _new_filtros.pop("fecha", None)
+                    else:
+                        _new_filtros["fecha"] = _clicked_x
+                    _changed = True
+                    break
+
+        # Tipo: click en el gráfico horizontal de tipos (y = nombre del tipo)
+        if not _changed and ev_dist_tipo is not None and hasattr(ev_dist_tipo, "selection"):
+            _pts_tipo = (ev_dist_tipo.selection or {}).get("points", [])
+            if _pts_tipo:
+                _clicked_tipo = str(_pts_tipo[0].get("y", _pts_tipo[0].get("x", "")))
+                if _clicked_tipo:
+                    if _new_filtros.get("tipo") == _clicked_tipo:
+                        _new_filtros.pop("tipo", None)
+                    else:
+                        _new_filtros["tipo"] = _clicked_tipo
+                    _changed = True
+
+        # Estado: click en el gráfico de estado (x = "OK" / "Diferencia")
+        if not _changed and ev_dist_est is not None and hasattr(ev_dist_est, "selection"):
+            _pts_est = (ev_dist_est.selection or {}).get("points", [])
+            if _pts_est:
+                _clicked_est = str(_pts_est[0].get("x", ""))
+                if _clicked_est in ("OK", "Diferencia"):
+                    if _new_filtros.get("estado") == _clicked_est:
+                        _new_filtros.pop("estado", None)
+                    else:
+                        _new_filtros["estado"] = _clicked_est
+                    _changed = True
+
+        if _changed:
+            st.session_state.viz_filtros = _new_filtros
+            st.rerun()
 
         # ── Tabla por Unidad de Gestión (Categoria) ───────────────────────────
         st.divider()
